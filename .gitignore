@@ -1,0 +1,28 @@
+# Agent config and skills (live in winduo/.kiro, never commit)
+.kiro/
+
+# Node / build
+node_modules/
+dist/
+.vite/
+coverage/
+artifacts/
+output/
+playwright-report/
+test-results/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Blender autosaves and backups (keep .blend sources, drop noise)
+*.blend1
+*.blend2
+*.blend@
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+*.log
