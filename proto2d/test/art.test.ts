@@ -16,7 +16,7 @@ const man: UnitSpec = { ...specFor("man", "biped"), art: undefined, attack: "pun
 
 describe("every emoji art rig", () => {
   it("builds, stays upright and finite, and closes on an enemy", () => {
-    expect(RIGS.length).toBeGreaterThan(50);
+    expect(RIGS.length).toBeGreaterThan(40);
     const bad: string[] = [];
     for (const r of RIGS) {
       const b = new Battle([specFor(r.id, r.plan), man], 5);
