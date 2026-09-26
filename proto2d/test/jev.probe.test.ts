@@ -33,7 +33,7 @@ it.skipIf(!process.env.JEV_PROBE)("phrases -> specs", async () => {
     const s = r.spec;
     const low = Object.entries(r.confidence).filter(([, c]) => c < 0.5).map(([k]) => k);
     console.log(
-      `${phrase.padEnd(26)} n=${String(s.count).padEnd(3)} ${s.plan.padEnd(9)} ${s.size.toFixed(2)}m ${s.weight.toFixed(0).padStart(4)}kg ` +
+      `${phrase.padEnd(26)} art=${(s.art ?? "-").padEnd(13)} n=${String(s.count).padEnd(3)} ${s.plan.padEnd(9)} ${s.size.toFixed(2)}m ${s.weight.toFixed(0).padStart(4)}kg ` +
         `str=${s.strength.toFixed(1)} tuf=${s.toughness.toFixed(1)} spd=${s.speed.toFixed(1)} brv=${s.bravery.toFixed(2)} arm=${s.armor.toFixed(2)} ` +
         `${s.attack}/${s.weapon}${s.canFly ? " fly" : ""} ${s.colors.body}/${s.colors.accent} ${r.ms}ms ${r.tokens}tok ` +
         Object.entries(s.features ?? {}).filter(([, v]) => v !== "none" && v !== false && v !== "plain").map(([k, v]) => `${k}=${typeof v === "number" ? v.toFixed(2) : v}`).join(" ") +

@@ -1,6 +1,6 @@
 // The battle: specs in, physics out. The winner is whoever is still standing.
 import RAPIER, { type Collider, type RevoluteImpulseJoint, type RigidBody, type World } from "@dimforge/rapier2d-deterministic-compat";
-import { buildBlueprint, CHEAP_ABOVE, shapeArea, type Blueprint, type ColliderBP, type DecoBP, type JointRole, type SegmentBP } from "./plans";
+import { buildBlueprint, CHEAP_ABOVE, shapeArea, type ArtLayout, type Blueprint, type ColliderBP, type DecoBP, type JointRole, type SegmentBP } from "./plans";
 import { Rng } from "./rng";
 import type { UnitSpec } from "./spec";
 
@@ -29,6 +29,16 @@ export interface DrawCollider {
   bp: ColliderBP;
   layer: number;
   eye: boolean;
+  hidden: boolean;
+}
+
+/** One cut-out piece of emoji art pinned to a body. offset: art origin relative to the body at spawn. */
+export interface DrawArt {
+  body: RigidBody;
+  unit: Unit;
+  label: 1 | 2 | 3;
+  offset: [number, number];
+  layout: ArtLayout;
 }
 
 export interface DrawDeco {
@@ -99,6 +109,7 @@ export class Battle {
   readonly units: Unit[] = [];
   readonly draw: DrawCollider[] = [];
   readonly decor: DrawDeco[] = [];
+  readonly art: DrawArt[] = [];
   readonly arenaHalf: number;
   readonly rng: Rng;
   time = 0;
@@ -206,9 +217,14 @@ export class Battle {
         this.owners.set(collider.handle, { unit, bp: c });
         if (c.foot) unit.feet.push(collider);
         const hasEyeDeco = seg.deco?.some((d) => d.paint === "eye") ?? false;
-        this.draw.push({ collider, unit, bp: c, layer: seg.layer, eye: !hasEyeDeco && seg.id === bp.head && c === seg.colliders[0] && c.shape.kind === "ball" });
+        const isWeapon = c.paint === "metal" || (c.striker && c.densityMul > 1);
+        const hidden = !!bp.art && !isWeapon && !(bp.art.showLegs && seg.id.startsWith("leg"));
+        this.draw.push({ collider, unit, bp: c, layer: seg.layer, hidden, eye: !bp.art && !hasEyeDeco && seg.id === bp.head && c === seg.colliders[0] && c.shape.kind === "ball" });
       }
       for (const d of seg.deco ?? []) this.decor.push({ body, unit, d, layer: seg.layer });
+      if (bp.art) bp.art.piece.forEach((sid, i) => {
+        if (sid === seg.id && bp.art!.rig.pieces[i]) this.art.push({ body, unit, label: (i + 1) as 1 | 2 | 3, offset: [-seg.pos[0], -seg.pos[1] - 0.01], layout: bp.art! });
+      });
       return body;
     };
 

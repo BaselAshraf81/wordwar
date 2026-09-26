@@ -1,6 +1,7 @@
 // Server-only: turns a typed phrase into a UnitSpec with one Jev call.
 // Jev only describes what the thing IS, from closed lists. It never sees the opponent,
 // so it cannot pick a winner. Numbers and arithmetic stay in code (Jev is weak at them).
+import { RIG_BY_ID, RIGS } from "../art/rigs";
 import type { Attack, Ears, Features, Horns, Pattern, PlanId, Tail, UnitSpec, Weapon } from "../sim/spec";
 
 const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
@@ -99,7 +100,7 @@ export function parseCount(phrase: string): number | null {
   const m = p.match(/^(?:(?:a|an|one)\s+)?(hundred|dozen)\b/) ?? p.match(/^(an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty)\b/);
   if (!m) return null;
   // "a swarm of ...": the article says nothing about the count.
-  if ((m[1] === "a" || m[1] === "an") && /^an?\s+(swarm|horde|army|pack|flock|herd|crowd|gang|group|bunch|mob|colony|legion|squad|team|family|troop|school|band)\b/.test(p)) return null;
+  if ((m[1] === "a" || m[1] === "an") && /^an?\s+(swarm|horde|army|pack|flock|herd|crowd|gang|group|bunch|mob|colony|legion|squad|team|family|troop|school|band|stampede|gaggle|pride|murder|fleet|litter|nest|parliament|posse|platoon|battalion|convoy|tribe|clan|mass|load|ton|bunch|couple|few)\b/.test(p)) return null;
   return WORDS[m[1]] ?? null;
 }
 
@@ -122,6 +123,10 @@ function questions() {
     ),
     hateful: noul("Is `phrase` a slur, or does it describe people mainly by their race, ethnicity, religion, gender, sexuality or disability?"),
     count: choice("How many individual bodies does `phrase` describe?", Object.fromEntries(COUNT.map((c) => [c[0], null]))),
+    art: choice(`Which drawing is the best picture of ${ONE}? Only pick a drawing if it shows the same kind of animal or vehicle.`, {
+      ...Object.fromEntries(RIGS.map((r) => [r.id, r.desc])),
+      none: "none of these: it is a person, a robot, a monster, an object or some other thing not listed",
+    }),
     plan: choice(`Which body shape best fits ${ONE}?`, Object.fromEntries(PLAN_ORDER.map((p) => [p, PLANS[p]]))),
     body_length: score(`How long is the body of ${ONE}, compared with its height?`, [
       "very short and compact, like a hamster, a pug or a puffer fish",
@@ -254,7 +259,10 @@ export async function phraseToSpec(phrase: string, apiKey: string): Promise<JevR
     for (const c of COUNT) logSum += (probs[c[0]] ?? 0) * Math.log((c[1] + c[2]) / 2);
     count = Math.round(Math.exp(logSum));
   }
-  const plan = C("plan") as PlanId;
+  // A drawing is used only when Jev is fairly sure it shows the same kind of thing.
+  const artAns = a.art as { choice: string; probabilities: Record<string, number> };
+  const rig = artAns.choice !== "none" && (artAns.probabilities[artAns.choice] ?? 0) >= 0.45 ? RIG_BY_ID.get(artAns.choice) : undefined;
+  const plan = (rig?.plan ?? C("plan")) as PlanId;
   let attack = C("attack") as Attack;
   // The body plan decides which attacks are physically possible.
   if (plan === "wheeled") attack = "ram";
@@ -296,6 +304,7 @@ export async function phraseToSpec(phrase: string, apiKey: string): Promise<JevR
     canFly: plan === "bird" && N("flies") > 0.5,
     colors: { body: bodyColor, accent },
     features,
+    ...(rig ? { art: rig.id } : {}),
   };
   const confidence: Record<string, number> = {};
   for (const [k, v] of Object.entries(a)) if ("confidence" in v) confidence[k] = v.confidence;

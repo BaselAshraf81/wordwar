@@ -1,5 +1,6 @@
 // Canvas renderer. Reads physics state; never writes it.
-import type { Battle, DrawCollider, DrawDeco, Unit } from "./sim/battle";
+import { decodeLabels, type ArtRig } from "./art/rigs";
+import type { Battle, DrawArt, DrawCollider, DrawDeco, Unit } from "./sim/battle";
 import type { DecoShape, Paint } from "./sim/plans";
 
 type RGB = [number, number, number];
@@ -18,7 +19,65 @@ const WHITE: RGB = [255, 255, 255];
 const GREY: RGB = [120, 118, 125];
 const FIXED: Partial<Record<Paint, string>> = { metal: "#cfd6dd", bone: "#f1e9d2", red: "#d94a4a" };
 
-type Item = { kind: "col"; d: DrawCollider; unit: Unit; key: number } | { kind: "deco"; d: DrawDeco; unit: Unit; key: number };
+type Item =
+  | { kind: "col"; d: DrawCollider; unit: Unit; key: number }
+  | { kind: "deco"; d: DrawDeco; unit: Unit; key: number }
+  | { kind: "art"; d: DrawArt; unit: Unit; key: number };
+
+/** Emoji art cut into body/head/tail canvases, rendered at UP x the rig resolution. */
+const UP = 4;
+interface ArtCut {
+  pieces: ({ c: ImageBitmap; x: number; y: number } | null)[];
+  legColor: string;
+}
+const artCache = new Map<string, Promise<ArtCut>>();
+const artReady = new Map<string, ArtCut>();
+
+function loadArt(rig: ArtRig): Promise<ArtCut> {
+  let p = artCache.get(rig.id);
+  if (p) return p;
+  p = new Promise<ArtCut>((resolve, reject) => {
+    const img = new Image();
+    img.onload = async () => {
+      const N = rig.res * UP;
+      const full = document.createElement("canvas");
+      full.width = full.height = N;
+      const fc = full.getContext("2d", { willReadFrequently: true })!;
+      fc.drawImage(img, 0, 0, N, N);
+      const src = fc.getImageData(0, 0, N, N);
+      const labels = decodeLabels(rig);
+      const out = [1, 2, 3].map(() => new ImageData(N, N));
+      let lr = 0, lg = 0, lb = 0, ln = 0;
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        const i = (y * N + x) * 4;
+        if (src.data[i + 3] === 0) continue;
+        const L = labels[Math.floor(y / UP) * rig.res + Math.floor(x / UP)];
+        if (L === 0) {
+          // Pixels below the belly: the drawn legs. Their colour paints the physics legs.
+          if (src.data[i + 3] > 200) { lr += src.data[i]; lg += src.data[i + 1]; lb += src.data[i + 2]; ln++; }
+          continue;
+        }
+        out[L - 1].data.set(src.data.subarray(i, i + 4), i);
+      }
+      // Each piece keeps only its own box (plus a pixel of margin), so drawing is cheap.
+      const pieces = await Promise.all(out.map(async (d, k) => {
+        const b = rig.pieces[k];
+        if (!b) return null;
+        const x = Math.max(0, b[0] * UP - UP), y = Math.max(0, b[1] * UP - UP);
+        const w = Math.min(N - x, (b[2] - b[0] + 3) * UP), h = Math.min(N - y, (b[3] - b[1] + 3) * UP);
+        return { c: await createImageBitmap(d, x, y, w, h), x, y };
+      }));
+      const legColor = ln ? toHex([lr / ln, lg / ln, lb / ln]) : "#6b5a4a";
+      const cut = { pieces, legColor };
+      artReady.set(rig.id, cut);
+      resolve(cut);
+    };
+    img.onerror = reject;
+    img.src = `/emoji/${rig.cp}.svg`;
+  });
+  artCache.set(rig.id, p);
+  return p;
+}
 interface Colors {
   fill: string;
   line: string;
@@ -44,6 +103,9 @@ export class Renderer {
     const items: Item[] = [];
     for (const d of b.draw) items.push({ kind: "col", d, unit: d.unit, key: d.layer * 3 + 1 });
     for (const d of b.decor) items.push({ kind: "deco", d, unit: d.unit, key: d.layer * 3 + (d.d.front ? 2 : 0) });
+    // Art sits on the body layer: tail behind body behind head.
+    for (const d of b.art) items.push({ kind: "art", d, unit: d.unit, key: 1 * 3 + 1 + (d.label === 3 ? -0.2 : d.label === 2 ? 0.2 : 0) });
+    for (const d of b.art) loadArt(d.layout.rig).then(() => this.colors.clear()).catch(() => {});
     this.items = items.sort((a, c) => a.key - c.key);
   }
 
@@ -60,7 +122,8 @@ export class Renderer {
     };
     const body = tint(u.spec.colors.body, u.id, 0.5);
     const accent = tint(u.spec.colors.accent, u.id * 7 + 3, 0.9);
-    const base = FIXED[p] ?? (p === "accent" ? accent : p === "dark" ? mix(body, BLACK, 0.55) : body);
+    const cut = u.bp.art ? artReady.get(u.bp.art.rig.id) : undefined;
+    const base = cut && p === "dark" ? cut.legColor : FIXED[p] ?? (p === "accent" ? accent : p === "dark" ? mix(body, BLACK, 0.55) : body);
     const far = layer === 0 ? 0.22 : 0;
     const c: Colors = {
       fill: mix(base, BLACK, far),
@@ -156,8 +219,13 @@ export class Renderer {
     for (const pass of [false, true]) {
       for (const it of this.items) {
         if (it.unit.alive !== pass) continue;
+        if (it.kind === "art") {
+          this.drawArt(it.d, X, Y, s, pass);
+          continue;
+        }
         if (it.kind === "col") {
           const { collider: c, bp } = it.d;
+          if (it.d.hidden && (!it.unit.bp.art || artReady.has(it.unit.bp.art.rig.id))) continue;
           const t = c.translation();
           const col = this.paint(it.unit, bp.paint, it.d.layer);
           this.shape(bp.shape, X(t.x), Y(t.y), c.rotation(), s, pass ? col.fill : col.dead, pass ? col.line : col.deadLine, outline);
@@ -218,6 +286,24 @@ export class Renderer {
       ctx.fillStyle = hp > 0.5 ? "#7ddc6a" : hp > 0.25 ? "#f2c14e" : "#e5533d";
       ctx.fillRect(bx, by, bw * hp, 5);
     }
+  }
+
+  private drawArt(a: DrawArt, X: (x: number) => number, Y: (y: number) => number, s: number, alive: boolean): void {
+    const cut = artReady.get(a.layout.rig.id);
+    const piece = cut?.pieces[a.label - 1];
+    if (!piece) return;
+    const { k, flip, cx, rig } = a.layout;
+    const t = a.body.translation();
+    const A = a.body.rotation();
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.translate(X(t.x), Y(t.y));
+    ctx.rotate(-A);
+    ctx.translate(a.offset[0] * s, -a.offset[1] * s);
+    ctx.scale((flip * k * s) / UP, (k * s) / UP);
+    if (!alive) ctx.globalAlpha = 0.55;
+    ctx.drawImage(piece.c, piece.x - cx * UP, piece.y - (rig.bbox[3] + 1) * UP);
+    ctx.restore();
   }
 
   private shape(sh: DecoShape, x: number, y: number, a: number, s: number, fill: string, line: string, outline: number): void {

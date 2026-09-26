@@ -48,6 +48,8 @@ export interface UnitSpec {
   canFly: boolean;
   colors: { body: string; accent: string };
   features?: Partial<Features>;
+  /** Emoji art rig id (src/art/rigs.json). When set, the body is fitted to the drawing. */
+  art?: string;
 }
 
 const human = (over: Partial<UnitSpec>): UnitSpec => ({
@@ -165,6 +167,7 @@ export const MATCHUPS: Matchup[] = [
       canFly: false,
       colors: { body: "#e07a2f", accent: "#fff3e0" },
       features: { ears: "pointy", tail: "long", pattern: "stripes", snout: 0.25, bulk: 0.85 },
+      art: "cat",
     },
   },
   {

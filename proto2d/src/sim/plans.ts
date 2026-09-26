@@ -1,5 +1,6 @@
 // Body plans as data. One builder per plan turns a UnitSpec into a blueprint;
 // battle.ts turns any blueprint into Rapier bodies. Nothing here reads spec.label.
+import { RIG_BY_ID, type ArtRig } from "../art/rigs";
 import { featuresOf, type Features, type UnitSpec, type Weapon } from "./spec";
 
 export type Shape =
@@ -65,6 +66,7 @@ export interface Blueprint {
   move?: "flop" | "slither" | "hop";
   /** Spine joints that undulate, head to tail. */
   wave?: string[];
+  art?: ArtLayout;
 }
 
 type Part = Partial<ColliderBP> & { shape: Shape };
@@ -488,6 +490,8 @@ function wheeled(s: UnitSpec, f: number): Blueprint {
 export const CHEAP_ABOVE = 30;
 
 export function buildBlueprint(s: UnitSpec, facing: 1 | -1, crowd: number): Blueprint {
+  const rig = s.art ? RIG_BY_ID.get(s.art) : undefined;
+  if (rig) return artBody(s, facing, rig);
   switch (s.plan) {
     case "biped":
       return biped(s, facing, crowd > CHEAP_ABOVE);
@@ -512,4 +516,98 @@ export function shapeArea(sh: Shape): number {
   if (sh.kind === "ball") return Math.PI * sh.r * sh.r;
   if (sh.kind === "capsule") return 4 * sh.hh * sh.r + Math.PI * sh.r * sh.r;
   return 4 * sh.hx * sh.hy;
+}
+
+// ---------- art-driven bodies: physics fitted to an emoji drawing ----------
+
+/** Where the drawing sits relative to the body, so the renderer can pin pieces to bones. */
+export interface ArtLayout {
+  rig: ArtRig;
+  k: number; // metres per render pixel
+  flip: number; // +1: drawing x maps to world +x, -1 mirrored
+  cx: number; // drawing pixel x at world x = 0
+  piece: [string, string, string]; // segment id carrying body, head, tail pieces
+  showLegs: boolean;
+}
+
+export function artBody(s: UnitSpec, f: number, rig: ArtRig): Blueprint & { art: ArtLayout } {
+  const [x0, , x1, y1] = rig.bbox;
+  const W = x1 - x0 + 1, H = y1 - rig.bbox[1] + 1;
+  const k = rig.plan === "bird" ? s.size / H : s.size / W;
+  const flip = rig.faceLeft ? -f : f;
+  const cx = (x0 + x1) / 2;
+  const P = (px: number, py: number): [number, number] => [(px - cx) * k * flip, (y1 + 1 - py) * k];
+  const box = (b: [number, number, number, number]) => {
+    const [a, c] = [P(b[0], b[3] + 1), P(b[2] + 1, b[1])];
+    return { x: (a[0] + c[0]) / 2, y: (a[1] + c[1]) / 2, w: Math.abs(c[0] - a[0]), h: Math.abs(c[1] - a[1]) };
+  };
+  const [bodyBox, headBox, tailBox] = rig.pieces;
+  const B = box(bodyBox!);
+  const segs: SegmentBP[] = [];
+  const joints: JointBP[] = [];
+  const legs: Blueprint["legs"] = [];
+  const legged = rig.plan === "quadruped" || rig.plan === "bird";
+  const stubby = rig.belly >= y1;
+
+  if (rig.plan === "wheeled") {
+    const hy = Math.min(B.h, B.w) / 2;
+    const chassis: ColliderBP[] = [col({ shape: { kind: "box", hx: B.w / 2 * 0.95, hy: hy * 0.8 }, sharp: 0.6, striker: true })];
+    if (s.weapon !== "none") {
+      const w = WEAPONS[s.weapon];
+      chassis.push(col({ shape: { kind: "capsule", hh: w.len / 2, r: w.r }, offset: [f * (B.w / 2 + w.len / 2), 0], rot: Math.PI / 2, densityMul: w.density, sharp: w.sharp, paint: w.paint, striker: true }));
+    }
+    segs.push({ id: "torso", pos: [B.x, B.y], layer: 1, colliders: chassis });
+    const wr = Math.max(0.04, B.h * 0.2);
+    for (const [id, x] of [["wheelB", B.x - 0.32 * B.w], ["wheelF", B.x + 0.32 * B.w]] as const) {
+      segs.push({ id, pos: [x, wr], layer: 2, colliders: [col({ shape: { kind: "ball", r: wr }, paint: "dark", foot: true })] });
+      joints.push({ id, a: "torso", b: id, at: [x, wr], limits: null, role: "wheel" });
+    }
+    const wl = s.weapon === "none" ? 0 : WEAPONS[s.weapon].len;
+    return {
+      segments: segs, joints, torso: "torso", head: "torso", strikeSeg: "torso", standY: B.y, reach: B.w / 2 + wl, halfWidth: B.w / 2, legs, arms: [],
+      art: { rig, k, flip, cx, piece: ["torso", "torso", "torso"], showLegs: false },
+    };
+  }
+
+  // Torso: a capsule filling the body piece. Legs hang from its underside to the ground.
+  const tr = Math.min(B.h, B.w) / 2 * 0.85;
+  segs.push({ id: "torso", pos: [B.x, B.y], layer: 1, colliders: [col({ shape: { kind: "capsule", hh: Math.max(0.01, B.w / 2 - tr), r: tr }, rot: Math.PI / 2, sharp: 0.5, foot: !legged })] });
+  let head = "torso", tail = "torso";
+  if (headBox) {
+    const Hd = box(headBox);
+    const hr = Math.min(Hd.w, Hd.h) / 2 * 0.8;
+    const cut = P(rig.cuts[0], 0)[0];
+    segs.push({ id: "head", pos: [Hd.x, Hd.y], layer: 1, colliders: [col({ shape: { kind: "ball", r: hr }, striker: true, sharp: rig.plan === "fish" ? 2.2 : 1.7, foot: !legged })] });
+    joints.push({ id: "neck", a: "torso", b: "head", at: [cut, (Hd.y + B.y) / 2], limits: [-0.5, 0.5], role: "neck", torqueMul: 2 });
+    head = "head";
+  }
+  if (tailBox) {
+    const Tl = box(tailBox);
+    const cut = P(rig.cuts[1], 0)[0];
+    segs.push({ id: "tail", pos: [Tl.x, Tl.y], layer: 1, colliders: [col({ shape: { kind: "capsule", hh: Math.max(0.01, Tl.w / 2 - Tl.h / 3), r: Math.max(0.01, Tl.h / 3) }, rot: Math.PI / 2, densityMul: 0.6, foot: !legged })] });
+    joints.push({ id: rig.plan === "fish" ? "spine1" : "tail", a: "torso", b: "tail", at: [cut, (Tl.y + B.y) / 2], limits: [-0.8, 0.8], role: rig.plan === "fish" ? "spine" : "tail" });
+    tail = "tail";
+  }
+
+  if (legged) {
+    const bellyY = stubby ? Math.max(0.05 * s.size, B.y - B.h / 2 + tr * 0.6) : P(0, rig.belly)[1];
+    const rl = Math.max(0.015, 0.04 * s.size);
+    const spots = rig.plan === "bird" ? [[0.12, 0, 0], [-0.12, 2, 0.5]] : [[0.7, 0, 0], [0.75, 2, 0.5], [-0.7, 0, 0.5], [-0.65, 2, 0]];
+    spots.forEach(([dx, layer, phase], i) => {
+      const x = B.x + f * dx * (B.w / 2 - tr * 0.3);
+      const id = `leg${i}`;
+      segs.push(vcap(id, x, rl, bellyY + tr * 0.3, rl, layer as 0 | 2, { paint: "dark", foot: true, sharp: 0.8 }));
+      joints.push({ id: `hip${i}`, a: "torso", b: id, at: [x, bellyY + tr * 0.3], limits: [-1, 1], role: "hip" });
+      legs.push({ hip: `hip${i}`, phase });
+    });
+  }
+
+  const hs = segs.find((q) => q.id === head)!;
+  const reach = Math.abs(hs.pos[0] - B.x) + (head === "torso" ? B.w / 2 : Math.min(box(headBox!).w, box(headBox!).h) / 2) + 0.05 * s.size;
+  return {
+    segments: segs, joints, torso: "torso", head, strikeSeg: head, standY: B.y, reach, halfWidth: B.w / 2 + 0.1 * s.size, legs, arms: [],
+    move: rig.plan === "fish" ? "flop" : undefined,
+    wave: rig.plan === "fish" ? ["neck", "spine1"].filter((j) => joints.some((q) => q.id === j)) : undefined,
+    art: { rig, k, flip, cx, piece: ["torso", head, tail], showLegs: legged && !stubby },
+  };
 }
