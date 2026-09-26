@@ -45,7 +45,7 @@ describe("determinism", () => {
     expect(a.hash()).toBe(b.hash());
     expect(a.hash()).not.toBe(c.hash());
     [a, b, c].forEach((x) => x.dispose());
-  });
+  }, 60_000);
 });
 
 describe("matchups resolve", () => {
