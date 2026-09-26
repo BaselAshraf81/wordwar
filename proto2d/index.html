@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='7' fill='%23b5433a'/></svg>" />
+    <title>wordwar: type any army, watch it fight</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="stage" aria-label="Battle view"></canvas>
+    <header class="bar">
+      <h1>word<span>war</span></h1>
+      <label class="pick">
+        <span class="sr">Matchup</span>
+        <select id="matchups"></select>
+      </label>
+    </header>
+    <section class="score" aria-live="polite">
+      <div class="side left"><b id="lname"></b><span id="lcount"></span></div>
+      <div class="clock" id="clock">0.0s</div>
+      <div class="side right"><b id="rname"></b><span id="rcount"></span></div>
+    </section>
+    <div class="banner" id="banner" hidden></div>
+    <footer class="controls">
+      <button id="restart" title="Replay this exact fight (R)">Replay</button>
+      <button id="reseed" title="Same armies, new fight (N)">Rematch</button>
+      <button id="slow" aria-pressed="false" title="Slow motion (S)">Slow-mo</button>
+      <button id="share" title="Copy a link to this exact fight">Copy link</button>
+      <span class="seed" id="seed"></span>
+    </footer>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
