@@ -6,7 +6,12 @@ import type { UnitSpec } from "./spec";
 
 export const DT = 1 / 60;
 const G = 9.81;
-const DAMAGE = 0.6;
+const DAMAGE = 0.2;
+
+/** Change a whole unit's velocity by (dvx, dvy): every body gets its share, so many-bone bodies move as one instead of the torso being flung. */
+function push(u: { bodies: Map<string, RigidBody> }, dvx: number, dvy: number): void {
+  for (const body of u.bodies.values()) body.applyImpulse({ x: body.mass() * dvx, y: body.mass() * dvy }, true);
+}
 const TIME_LIMIT = 75;
 
 let ready: Promise<void> | null = null;
@@ -310,11 +315,19 @@ export class Battle {
     const maxSpeed = 2.4 * s.speed * Math.sqrt(Math.max(0.3, s.size) / 1.7);
 
     let grounded = false;
+    // Standing = a foot is on the floor, or touching anything (a rock, a pile of bodies).
     for (const c of u.feet) {
       if (lowestPoint(c) < 0.06 + s.size * 0.04) {
         grounded = true;
         break;
       }
+      this.world.contactPairsWith(c, (other) => {
+        if (grounded) return;
+        this.world.contactPair(c, other, (m) => {
+          if (m.numContacts() > 0) grounded = true;
+        });
+      });
+      if (grounded) break;
     }
 
     if (flying && tgt) {
@@ -460,14 +473,14 @@ export class Battle {
       ny /= n;
       const speed = strikeSpeed(s);
       if (s.attack === "ram" || s.attack === "charge") {
-        u.torso.applyImpulse({ x: dir * u.mass * 3.5 * s.speed, y: u.mass * 0.8 }, true);
+        push(u, dir * 3.5 * s.speed, 0.8);
       } else {
         seg.applyImpulse({ x: nx * seg.mass() * speed, y: ny * seg.mass() * speed }, true);
-        if (s.plan === "quadruped" || s.plan === "bug") u.torso.applyImpulse({ x: dir * u.mass * 2.2 * s.speed, y: u.mass * 1.8 }, true); // pounce
+        if (s.plan === "quadruped" || s.plan === "bug") push(u, dir * 2.2 * s.speed, 1.8); // pounce
         if (s.plan === "fish") for (const body of u.bodies.values()) body.applyImpulse({ x: dir * body.mass() * 3 * s.speed, y: body.mass() * 2.5 }, true); // lunge
       }
     }
-    if (u.strikeT > 0 && --u.strikeT === 0) u.cooldown = Math.floor((28 / s.speed) * this.rng.range(0.7, 1.3));
+    if (u.strikeT > 0 && --u.strikeT === 0) u.cooldown = Math.floor((50 / s.speed) * this.rng.range(0.7, 1.3));
   }
 
   private resolveHits(u: Unit): void {
@@ -479,6 +492,10 @@ export class Battle {
       this.world.contactPairsWith(c, (other) => {
         const o = this.owners.get(other.handle);
         if (!o || o.unit.team === u.team || !o.unit.alive || u.struck.has(o.unit.id)) return;
+        // A bite or peck grabs one body. Swings and charges can sweep a few, more when the attacker is far bigger.
+        const grab = u.spec.attack === "bite" || u.spec.attack === "peck";
+        const sweep = grab ? 1 : Math.min(5, 1 + Math.floor(u.mass / o.unit.mass / 2));
+        if (u.struck.size >= sweep) return;
         let impulse = 0;
         this.world.contactPair(c, other, (m) => {
           for (let k = 0; k < m.numContacts(); k++) impulse += m.contactImpulse(k);
@@ -488,7 +505,8 @@ export class Battle {
         // Contact confirms the hit; the strike's momentum sizes it (limb plus a share of body
         // weight thrown behind it). Measured contact impulse is too small once the fist has slowed.
         const behind = u.spec.attack === "ram" || u.spec.attack === "charge" ? 0.5 : 0.05;
-        this.hit(u, o.unit, mine.bp.sharp, (seg.mass() + u.mass * behind) * strikeSpeed(u.spec));
+        // Limb share is a fixed fraction of the body, so a big-headed 3D model does not bite harder than its size.
+        this.hit(u, o.unit, mine.bp.sharp, u.mass * (0.035 + behind) * strikeSpeed(u.spec));
       });
     }
   }
@@ -507,7 +525,7 @@ export class Battle {
     const ap = attacker.torso.translation(), vp = victim.torso.translation();
     const kdir = vp.x >= ap.x ? 1 : -1;
     const kb = (attacker.mass * 1.2 * Math.sqrt(attacker.spec.strength)) / victim.mass;
-    victim.torso.applyImpulse({ x: kdir * victim.mass * Math.min(9, kb), y: victim.mass * Math.min(5, kb * 0.5) }, true);
+    push(victim, kdir * Math.min(9, kb), Math.min(5, kb * 0.5));
     // Stun needs a real hit, and a unit that just recovered gets a moment of immunity,
     // otherwise a crowd of weak hits stun-locks anything big.
     const knock = dv + kb * 0.15;

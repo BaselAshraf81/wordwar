@@ -22,7 +22,7 @@ it("every rigged model stands, walks toward an enemy and stays finite", () => {
     let low = Infinity, tip = 0;
     for (let i = 0; i < 180; i++) {
       b.step();
-      if (i > 40) {
+      if (i > 40 && i < 100) { // walking, before the two meet
         low = Math.min(low, u.torso.translation().y);
         tip = Math.max(tip, Math.abs(u.torso.rotation()));
       }
