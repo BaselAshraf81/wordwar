@@ -35,7 +35,8 @@ it.skipIf(!process.env.JEV_PROBE)("phrases -> specs", async () => {
     console.log(
       `${phrase.padEnd(26)} n=${String(s.count).padEnd(3)} ${s.plan.padEnd(9)} ${s.size.toFixed(2)}m ${s.weight.toFixed(0).padStart(4)}kg ` +
         `str=${s.strength.toFixed(1)} tuf=${s.toughness.toFixed(1)} spd=${s.speed.toFixed(1)} brv=${s.bravery.toFixed(2)} arm=${s.armor.toFixed(2)} ` +
-        `${s.attack}/${s.weapon}${s.canFly ? " fly" : ""} ${s.colors.body}/${s.colors.accent} ${r.ms}ms ${r.tokens}tok` +
+        `${s.attack}/${s.weapon}${s.canFly ? " fly" : ""} ${s.colors.body}/${s.colors.accent} ${r.ms}ms ${r.tokens}tok ` +
+        Object.entries(s.features ?? {}).filter(([, v]) => v !== "none" && v !== false && v !== "plain").map(([k, v]) => `${k}=${typeof v === "number" ? v.toFixed(2) : v}`).join(" ") +
         (low.length ? ` lowconf:${low.join(",")}` : ""),
     );
   }

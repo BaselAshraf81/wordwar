@@ -1,6 +1,6 @@
 // The battle: specs in, physics out. The winner is whoever is still standing.
 import RAPIER, { type Collider, type RevoluteImpulseJoint, type RigidBody, type World } from "@dimforge/rapier2d-deterministic-compat";
-import { buildBlueprint, CHEAP_ABOVE, shapeArea, type Blueprint, type ColliderBP, type JointRole, type SegmentBP } from "./plans";
+import { buildBlueprint, CHEAP_ABOVE, shapeArea, type Blueprint, type ColliderBP, type DecoBP, type JointRole, type SegmentBP } from "./plans";
 import { Rng } from "./rng";
 import type { UnitSpec } from "./spec";
 
@@ -20,8 +20,8 @@ const groups = (membership: number, filter: number) => (membership << 16) | filt
 const GROUND = groups(0b001, 0b110);
 const TEAM = [groups(0b010, 0b101), groups(0b100, 0b011)];
 
-const STIFF: Record<JointRole, number> = { hip: 140, knee: 140, shoulder: 90, elbow: 90, neck: 110, tail: 15, wing: 80, wheel: 0 };
-const TORQUE: Record<JointRole, number> = { hip: 0.7, knee: 0.55, shoulder: 0.3, elbow: 0.22, neck: 0.18, tail: 0.02, wing: 0.08, wheel: 0 };
+const STIFF: Record<JointRole, number> = { hip: 140, knee: 140, shoulder: 90, elbow: 90, neck: 110, tail: 15, wing: 80, wheel: 0, spine: 70 };
+const TORQUE: Record<JointRole, number> = { hip: 0.7, knee: 0.55, shoulder: 0.3, elbow: 0.22, neck: 0.18, tail: 0.02, wing: 0.08, wheel: 0, spine: 0.3 };
 
 export interface DrawCollider {
   collider: Collider;
@@ -29,6 +29,13 @@ export interface DrawCollider {
   bp: ColliderBP;
   layer: number;
   eye: boolean;
+}
+
+export interface DrawDeco {
+  body: RigidBody;
+  unit: Unit;
+  d: DecoBP;
+  layer: number;
 }
 
 export interface Unit {
@@ -59,6 +66,7 @@ export interface Unit {
   strikes: number;
   hits: number;
   dealt: number;
+  nextHop: number;
   hover: { x: number; y: number }; // flyers' personal station around the target
 }
 
@@ -90,6 +98,7 @@ export class Battle {
   readonly world: World;
   readonly units: Unit[] = [];
   readonly draw: DrawCollider[] = [];
+  readonly decor: DrawDeco[] = [];
   readonly arenaHalf: number;
   readonly rng: Rng;
   time = 0;
@@ -107,7 +116,7 @@ export class Battle {
     this.world = new RAPIER.World({ x: 0, y: -G });
     this.world.timestep = DT;
     const biggest = Math.max(specs[0].size, specs[1].size);
-    this.arenaHalf = 16 + biggest * 3;
+    this.arenaHalf = 26 + biggest * 4;
 
     const ground = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
     this.world.createCollider(RAPIER.ColliderDesc.cuboid(this.arenaHalf + 20, 1).setTranslation(0, -1).setFriction(1).setCollisionGroups(GROUND), ground);
@@ -173,6 +182,7 @@ export class Battle {
       hits: 0,
       dealt: 0,
       hover: { x: r.range(0.2, 1.6), y: r.range(-0.3, 1.4) },
+      nextHop: r.range(0, 0.6),
     };
 
     const bodyOf = (seg: SegmentBP) => {
@@ -195,8 +205,10 @@ export class Battle {
         const collider = this.world.createCollider(desc, body);
         this.owners.set(collider.handle, { unit, bp: c });
         if (c.foot) unit.feet.push(collider);
-        this.draw.push({ collider, unit, bp: c, layer: seg.layer, eye: seg.id === bp.head && c === seg.colliders[0] && c.shape.kind === "ball" });
+        const hasEyeDeco = seg.deco?.some((d) => d.paint === "eye") ?? false;
+        this.draw.push({ collider, unit, bp: c, layer: seg.layer, eye: !hasEyeDeco && seg.id === bp.head && c === seg.colliders[0] && c.shape.kind === "ball" });
       }
+      for (const d of seg.deco ?? []) this.decor.push({ body, unit, d, layer: seg.layer });
       return body;
     };
 
@@ -212,7 +224,7 @@ export class Battle {
       j.setContactsEnabled(false);
       if (jb.limits) j.setLimits(jb.limits[0], jb.limits[1]);
       j.configureMotorModel(RAPIER.MotorModel.AccelerationBased);
-      const torque = jb.role === "wheel" ? spec.weight * 2 * spec.strength : TORQUE[jb.role] * spec.weight * G * spec.size * spec.strength;
+      const torque = jb.role === "wheel" ? spec.weight * 2 * spec.strength : TORQUE[jb.role] * (jb.torqueMul ?? 1) * spec.weight * G * spec.size * spec.strength;
       j.setMotorMaxForce(torque);
       if (jb.role !== "wheel") j.configureMotorPosition(0, STIFF[jb.role], 2 * Math.sqrt(STIFF[jb.role]) * 0.7);
       unit.joints.set(jb.id, { j, role: jb.role, torque });
@@ -297,7 +309,7 @@ export class Battle {
       const ay = G + Math.max(-8, Math.min(8, 6 * (hy - p.y) - 3 * v.y));
       const ax = Math.max(-10, Math.min(10, 4 * (u.fleeing ? dir * 5 : ex) - 2.5 * v.x)) * s.speed;
       torso.applyImpulse({ x: u.mass * ax * DT, y: u.mass * ay * DT }, true);
-    } else if (grounded && s.plan !== "wheeled") {
+    } else if (grounded && u.bp.legs.length > 0) {
       // Height assist: holds the body up only while its feet are on something.
       const ay = G + 30 * (u.bp.standY - p.y) - 6 * v.y;
       const fy = Math.max(0, Math.min(2.2 * G, ay)) * stun;
@@ -314,7 +326,20 @@ export class Battle {
 
     // Drive.
     const moving = (grounded || flying) && tgt !== null && (!close || u.fleeing);
-    if (moving && !flying && dir * v.x < maxSpeed) {
+    const mv = u.bp.move;
+    if (mv === "flop" || mv === "hop") {
+      // No legs: launch the whole body in hops. A beached shark flops toward you.
+      if (moving && this.time >= u.nextHop && stun > 0.5) {
+        const vy = Math.min(6, Math.sqrt(2 * G * (mv === "hop" ? 0.45 : 0.3) * Math.max(0.3, s.size)));
+        const vx = dir * Math.min(maxSpeed * 1.3, 1.6 * s.speed * Math.sqrt(Math.max(0.3, s.size)));
+        for (const body of u.bodies.values()) body.applyImpulse({ x: body.mass() * vx, y: body.mass() * vy }, true);
+        u.nextHop = this.time + this.rng.range(0.55, 0.85) / Math.sqrt(s.speed);
+      }
+    } else if (mv === "slither") {
+      if (moving && dir * v.x < maxSpeed * 0.8) {
+        for (const body of u.bodies.values()) body.applyImpulse({ x: dir * body.mass() * 7 * s.speed * stun * DT, y: 0 }, true);
+      }
+    } else if (moving && !flying && dir * v.x < maxSpeed) {
       torso.applyImpulse({ x: dir * u.mass * 9 * s.speed * stun * DT, y: 0 }, true);
     }
 
@@ -328,7 +353,15 @@ export class Battle {
       if (leg.knee) this.servo(u, leg.knee, -u.facing * (moving ? 0.9 : 0.1) * Math.max(0, Math.cos(a)));
     }
     if (s.plan === "bird") this.servo(u, "wing", u.facing * (flying ? 1.2 * Math.sin(2 * Math.PI * u.phase * 4) : -0.2));
-    if (s.plan === "quadruped") this.servo(u, "tail", -u.facing * 0.4 * Math.sin(2 * Math.PI * u.phase));
+    if (u.joints.has("tail")) this.servo(u, "tail", -u.facing * 0.4 * Math.sin(2 * Math.PI * u.phase));
+    if (u.bp.wave) {
+      // Undulation travels head to tail. Striking bodies keep the neck free for the bite.
+      const wamp = moving ? (mv === "slither" ? 0.55 : 0.6) : 0.12;
+      u.bp.wave.forEach((id, i) => {
+        if (id === "neck" && u.strikeT > 0) return;
+        this.servo(u, id, wamp * Math.sin(2 * Math.PI * u.phase * 1.5 - i * 1.1));
+      });
+    }
     if (s.plan === "wheeled") {
       for (const w of ["wheelB", "wheelF"]) {
         const jj = u.joints.get(w);
@@ -399,7 +432,8 @@ export class Battle {
         u.torso.applyImpulse({ x: dir * u.mass * 3.5 * s.speed, y: u.mass * 0.8 }, true);
       } else {
         seg.applyImpulse({ x: nx * seg.mass() * speed, y: ny * seg.mass() * speed }, true);
-        if (s.plan === "quadruped") u.torso.applyImpulse({ x: dir * u.mass * 2.2 * s.speed, y: u.mass * 1.8 }, true); // pounce
+        if (s.plan === "quadruped" || s.plan === "bug") u.torso.applyImpulse({ x: dir * u.mass * 2.2 * s.speed, y: u.mass * 1.8 }, true); // pounce
+        if (s.plan === "fish") for (const body of u.bodies.values()) body.applyImpulse({ x: dir * body.mass() * 3 * s.speed, y: body.mass() * 2.5 }, true); // lunge
       }
     }
     if (u.strikeT > 0 && --u.strikeT === 0) u.cooldown = Math.floor((28 / s.speed) * this.rng.range(0.7, 1.3));

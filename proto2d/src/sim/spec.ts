@@ -1,6 +1,34 @@
 // UnitSpec: the only thing the AI produces. See docs/unit-spec.md.
 
-export type PlanId = "biped" | "quadruped" | "bird" | "wheeled";
+export type PlanId = "biped" | "quadruped" | "bird" | "wheeled" | "fish" | "snake" | "bug" | "blob";
+export type Ears = "none" | "round" | "pointy" | "long";
+export type Horns = "none" | "short" | "long" | "antlers" | "tusks";
+export type Tail = "none" | "short" | "long" | "bushy";
+export type Pattern = "plain" | "stripes" | "spots";
+
+/** Shape features. Jev picks them from closed lists; code turns them into geometry. */
+export interface Features {
+  bodyLength: number; // ~0.75–1.4, multiplier
+  legLength: number; // ~0.55–1.45
+  neckLength: number; // ~0.8–3.2 (3 = giraffe)
+  bulk: number; // ~0.75–1.5
+  snout: number; // 0 flat face … 1.1 crocodile jaws
+  ears: Ears;
+  horns: Horns;
+  tail: Tail;
+  dorsalFin: boolean;
+  spikes: boolean;
+  mane: boolean;
+  pattern: Pattern;
+  legs: 6 | 8; // bugs only
+}
+
+export const DEFAULT_FEATURES: Features = {
+  bodyLength: 1, legLength: 1, neckLength: 1, bulk: 1, snout: 0.35, ears: "none", horns: "none",
+  tail: "none", dorsalFin: false, spikes: false, mane: false, pattern: "plain", legs: 6,
+};
+
+export const featuresOf = (s: UnitSpec): Features => ({ ...DEFAULT_FEATURES, ...s.features });
 export type Attack = "punch" | "kick" | "bite" | "peck" | "charge" | "slash" | "ram";
 export type Weapon = "none" | "sword" | "knife" | "club" | "spear";
 
@@ -19,6 +47,7 @@ export interface UnitSpec {
   armor: number;
   canFly: boolean;
   colors: { body: string; accent: string };
+  features?: Partial<Features>;
 }
 
 const human = (over: Partial<UnitSpec>): UnitSpec => ({
@@ -135,6 +164,7 @@ export const MATCHUPS: Matchup[] = [
       armor: 0,
       canFly: false,
       colors: { body: "#e07a2f", accent: "#fff3e0" },
+      features: { ears: "pointy", tail: "long", pattern: "stripes", snout: 0.25, bulk: 0.85 },
     },
   },
   {
@@ -166,6 +196,7 @@ export const MATCHUPS: Matchup[] = [
       armor: 0.3,
       canFly: false,
       colors: { body: "#6b4226", accent: "#3e2615" },
+      features: { ears: "round", tail: "short", bulk: 1.3, snout: 0.5, legLength: 0.85 },
     },
   },
 ];

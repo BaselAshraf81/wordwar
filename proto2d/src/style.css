@@ -48,10 +48,11 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
 
 .score {
   position: fixed; top: 110px; left: 50%; transform: translateX(-50%);
-  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 14px;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 14px;
   width: min(760px, calc(100% - 32px));
 }
-.side { display: flex; flex-direction: column; gap: 2px; }
+.side { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.side b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side b { font-size: 18px; }
 .side span { font-variant-numeric: tabular-nums; font-size: 14px; opacity: 0.8; }
 .left { text-align: left; } .left b { color: var(--left); }

@@ -1,7 +1,7 @@
 // Server-only: turns a typed phrase into a UnitSpec with one Jev call.
 // Jev only describes what the thing IS, from closed lists. It never sees the opponent,
 // so it cannot pick a winner. Numbers and arithmetic stay in code (Jev is weak at them).
-import type { Attack, PlanId, UnitSpec, Weapon } from "../sim/spec";
+import type { Attack, Ears, Features, Horns, Pattern, PlanId, Tail, UnitSpec, Weapon } from "../sim/spec";
 
 const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 const MODEL = "jev-1.13.0"; // pinned so tuned thresholds don't drift under an alias
@@ -56,7 +56,12 @@ const PLANS: Record<PlanId, string> = {
   quadruped: "walks on four legs and bites or charges: cats, dogs, bears, horses, cows, lions",
   bird: "a bird, or a small winged creature: geese, pigeons, chickens, bats",
   wheeled: "moves on wheels and has no legs: cars, Roombas, carts, tanks, shopping trolleys",
+  fish: "a fish or sea creature with fins and a tail and no legs: sharks, megalodons, whales, dolphins, piranhas, tuna",
+  snake: "a long legless body that slithers: snakes, worms, eels, pythons, sea serpents",
+  bug: "an insect, spider or other creature with six or more thin legs: ants, spiders, beetles, cockroaches, scorpions, crabs",
+  blob: "a round soft thing with no limbs that bounces or oozes: slimes, jellies, puddings, marshmallows, blobfish on land",
 };
+const PLAN_ORDER: PlanId[] = ["biped", "quadruped", "bird", "fish", "snake", "bug", "blob", "wheeled"];
 const ATTACKS: Record<Attack, string> = {
   punch: "hits with fists or hands",
   kick: "kicks with legs or feet",
@@ -102,6 +107,8 @@ const noul = (instructions: string, t?: string, f?: string) => ({ type: "noul", 
 const choice = (instructions: string, criteria: Record<string, string | null>) => ({ type: "choice", instructions, criteria });
 const score = (instructions: string, criteria: readonly string[]) => ({ type: "score", instructions, criteria });
 
+const ONE = "one individual member of `phrase` (one person, animal or object, not the whole group)";
+
 function questions() {
   const colorOpts = Object.fromEntries(Object.keys(COLORS).map((k) => [k, null]));
   return {
@@ -115,7 +122,60 @@ function questions() {
     ),
     hateful: noul("Is `phrase` a slur, or does it describe people mainly by their race, ethnicity, religion, gender, sexuality or disability?"),
     count: choice("How many individual bodies does `phrase` describe?", Object.fromEntries(COUNT.map((c) => [c[0], null]))),
-    plan: choice("Which body shape best fits one individual member of `phrase` (one person, animal or object, not the whole group)?", PLANS),
+    plan: choice(`Which body shape best fits ${ONE}?`, Object.fromEntries(PLAN_ORDER.map((p) => [p, PLANS[p]]))),
+    body_length: score(`How long is the body of ${ONE}, compared with its height?`, [
+      "very short and compact, like a hamster, a pug or a puffer fish",
+      "short, like a bear cub or a pig",
+      "average, like a dog or a horse",
+      "long, like a dachshund, a crocodile or a shark",
+      "very long, like a weasel, an eel or a limousine",
+    ]),
+    leg_length: score(`How long are the legs of ${ONE}?`, [
+      "no legs, or tiny stubby legs",
+      "short legs, like a badger, a corgi or a capybara",
+      "average legs, like a dog or a bear",
+      "long legs, like a deer, a horse or a cheetah",
+      "very long legs, like a giraffe, a flamingo or a daddy-long-legs",
+    ]),
+    neck: score(`How long is the neck of ${ONE}?`, ["no visible neck", "short neck", "average neck", "long neck, like a horse or a camel", "very long neck, like a giraffe or a brachiosaurus"]),
+    bulk: score(`How thick or bulky is the body of ${ONE}?`, [
+      "thin and slender, like a greyhound or a stick insect",
+      "lean",
+      "average",
+      "stocky, like a bulldog, a capybara or a bear",
+      "very bulky and round, like a hippo, a walrus or a sumo wrestler",
+    ]),
+    snout: score(`What does the face of ${ONE} look like from the side?`, [
+      "flat face with no snout, like a human, an owl or a pug",
+      "short muzzle, like a cat, a capybara or a bear cub",
+      "medium snout, like a dog or a bear",
+      "long snout or big jaws, like a wolf, a horse or a shark",
+      "very long jaws, like a crocodile, a swordfish or an anteater",
+    ]),
+    ears: choice(`What ears does ${ONE} have?`, {
+      none: "no visible ears, like a fish, a snake, a bird or a bug",
+      round: "small round ears, like a bear, a mouse or a capybara",
+      pointy: "pointed ears, like a cat, a wolf or a fox",
+      long: "long upright or floppy ears, like a rabbit, a donkey or a hound",
+    }),
+    horns: choice(`What horns, antlers or tusks does ${ONE} have?`, {
+      none: "none",
+      short: "short horns, like a goat or a young bull",
+      long: "long horns, like a bull, a ram or a rhino",
+      antlers: "branching antlers, like a deer or a moose",
+      tusks: "tusks, like an elephant, a boar or a walrus",
+    }),
+    tail: choice(`What tail does ${ONE} have?`, {
+      none: "no tail, or a fish tail fin",
+      short: "a short tail, like a bear or a rabbit",
+      long: "a long thin tail, like a cat, a monkey or a lizard",
+      bushy: "a big bushy tail, like a fox or a squirrel",
+    }),
+    dorsal_fin: noul(`Does ${ONE} have a fin sticking up from its back, like a shark or a dolphin?`),
+    spikes: noul(`Does ${ONE} have spikes, spines or plates along its back, like a stegosaurus, a hedgehog or a porcupine?`),
+    mane: noul(`Does ${ONE} have a mane or a big ruff of hair around its head, like a lion or a horse?`),
+    pattern: choice(`What markings does ${ONE} have?`, { plain: "plain, one colour, no clear markings", stripes: "stripes, like a tiger or a zebra", spots: "spots, like a leopard, a ladybird or a cow" }),
+    leg_count: choice(`If ${ONE} is a creature with many thin legs, how many legs does it have?`, { six: "six legs, like an insect", eight: "eight or more legs, like a spider, a scorpion or a crab" }),
     size: score("How big is one individual member of `phrase` (one person, animal or object, not the whole group)?", levels(SIZE)),
     weight: score("How heavy is one individual member of `phrase` (one person, animal or object, not the whole group)?", levels(WEIGHT)),
     strength: score("How physically strong is one individual member of `phrase` (one person, animal or object, not the whole group), compared with an ordinary adult human?", [
@@ -200,6 +260,23 @@ export async function phraseToSpec(phrase: string, apiKey: string): Promise<JevR
   if (plan === "wheeled") attack = "ram";
   else if (plan === "bird") attack = "peck";
   else if (plan === "quadruped" && attack !== "charge") attack = "bite";
+  else if (plan === "fish" || plan === "snake" || plan === "bug") attack = "bite";
+  else if (plan === "blob") attack = "charge";
+  const features: Features = {
+    bodyLength: map([0.75, 0.88, 1, 1.2, 1.4], S("body_length")),
+    legLength: map([0.55, 0.75, 1, 1.2, 1.45], S("leg_length")),
+    neckLength: map([0.8, 1, 1.2, 2, 3.2], S("neck")),
+    bulk: map([0.75, 0.88, 1, 1.2, 1.5], S("bulk")),
+    snout: map([0, 0.25, 0.45, 0.75, 1.1], S("snout")),
+    ears: C("ears") as Ears,
+    horns: C("horns") as Horns,
+    tail: C("tail") as Tail,
+    dorsalFin: N("dorsal_fin") > 0.5,
+    spikes: N("spikes") > 0.5,
+    mane: N("mane") > 0.5,
+    pattern: C("pattern") as Pattern,
+    legs: C("leg_count") === "eight" ? 8 : 6,
+  };
   const bodyColor = COLORS[C("body_color")] ?? "#8d8f96";
   let accent = COLORS[C("accent_color")] ?? "#2a2a2e";
   if (accent === bodyColor) accent = bodyColor === COLORS.black ? COLORS.grey : COLORS.black;
@@ -218,6 +295,7 @@ export async function phraseToSpec(phrase: string, apiKey: string): Promise<JevR
     weapon: plan === "biped" || plan === "wheeled" ? (C("weapon") as Weapon) : "none",
     canFly: plan === "bird" && N("flies") > 0.5,
     colors: { body: bodyColor, accent },
+    features,
   };
   const confidence: Record<string, number> = {};
   for (const [k, v] of Object.entries(a)) if ("confidence" in v) confidence[k] = v.confidence;

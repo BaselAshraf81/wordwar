@@ -1,52 +1,75 @@
 // Canvas renderer. Reads physics state; never writes it.
-import type { Battle, DrawCollider } from "./sim/battle";
+import type { Battle, DrawCollider, DrawDeco, Unit } from "./sim/battle";
+import type { DecoShape, Paint } from "./sim/plans";
 
-const hex = (c: string) => {
+type RGB = [number, number, number];
+const hex = (c: string): RGB => {
   const n = parseInt(c.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 };
-const mix = (c: string, to: [number, number, number], t: number) => {
+const toHex = ([r, g, b]: RGB) => "#" + [r, g, b].map((n) => Math.round(n).toString(16).padStart(2, "0")).join("");
+const mixRgb = (c: string, to: RGB, t: number): RGB => {
   const [r, g, b] = hex(c);
-  return `rgb(${Math.round(r + (to[0] - r) * t)},${Math.round(g + (to[1] - g) * t)},${Math.round(b + (to[2] - b) * t)})`;
+  return [r + (to[0] - r) * t, g + (to[1] - g) * t, b + (to[2] - b) * t];
 };
-const BLACK: [number, number, number] = [20, 16, 24];
-const GREY: [number, number, number] = [120, 118, 125];
+const mix = (c: string, to: RGB, t: number) => toHex(mixRgb(c, to, t));
+const BLACK: RGB = [20, 16, 24];
+const WHITE: RGB = [255, 255, 255];
+const GREY: RGB = [120, 118, 125];
+const FIXED: Partial<Record<Paint, string>> = { metal: "#cfd6dd", bone: "#f1e9d2", red: "#d94a4a" };
+
+type Item = { kind: "col"; d: DrawCollider; unit: Unit; key: number } | { kind: "deco"; d: DrawDeco; unit: Unit; key: number };
+interface Colors {
+  fill: string;
+  line: string;
+  dead: string;
+  deadLine: string;
+}
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private cam = { x: 0, y: 3, scale: 40, ready: false };
-  private order: DrawCollider[] = [];
-  private colors = new Map<DrawCollider, { fill: string; line: string; dead: string; deadLine: string }>();
+  private items: Item[] = [];
+  private colors = new Map<string, Colors>();
+  private battle: Battle | null = null;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext("2d")!;
   }
 
   attach(b: Battle): void {
+    this.battle = b;
     this.cam.ready = false;
-    this.order = [...b.draw].sort((a, c) => a.layer - c.layer);
     this.colors.clear();
-    // Crowds get per-body tint so "100 men" reads as 100 people, not one sprite. Seeded by unit id.
+    const items: Item[] = [];
+    for (const d of b.draw) items.push({ kind: "col", d, unit: d.unit, key: d.layer * 3 + 1 });
+    for (const d of b.decor) items.push({ kind: "deco", d, unit: d.unit, key: d.layer * 3 + (d.d.front ? 2 : 0) });
+    this.items = items.sort((a, c) => a.key - c.key);
+  }
+
+  /** Paint -> colours for one unit, with per-body tint in crowds so 100 men aren't one sprite. */
+  private paint(u: Unit, p: Paint, layer: number): Colors {
+    const k = `${u.id}|${p}|${layer}`;
+    const hit = this.colors.get(k);
+    if (hit) return hit;
+    const crowd = (this.battle?.specs[u.team].count ?? 1) > 3;
     const tint = (c: string, id: number, amt: number) => {
+      if (!crowd) return c;
       const t = (((id * 2654435761) >>> 0) % 1000) / 1000;
-      return t < 0.5 ? mix(c, BLACK, (0.5 - t) * amt) : mix(c, [255, 255, 255], (t - 0.5) * amt);
+      return t < 0.5 ? mix(c, BLACK, (0.5 - t) * amt) : mix(c, WHITE, (t - 0.5) * amt);
     };
-    const toHex = (rgb: string) => "#" + (rgb.match(/\d+/g) ?? []).map((n) => Number(n).toString(16).padStart(2, "0")).join("");
-    for (const d of this.order) {
-      const crowd = b.specs[d.unit.team].count > 3;
-      const body = crowd ? toHex(tint(d.unit.spec.colors.body, d.unit.id, 0.5)) : d.unit.spec.colors.body;
-      const accent = crowd ? toHex(tint(d.unit.spec.colors.accent, d.unit.id * 7 + 3, 0.9)) : d.unit.spec.colors.accent;
-      const base = d.bp.paint === "accent" ? accent : d.bp.paint === "metal" ? "#cfd6dd" : d.bp.paint === "dark" ? mix(body, BLACK, 0.5) : body;
-      const baseHex = base.startsWith("#") ? base : body;
-      const far = d.layer === 0 ? 0.22 : 0;
-      const fill = base.startsWith("#") ? mix(base, BLACK, far) : base;
-      this.colors.set(d, {
-        fill,
-        line: mix(baseHex, BLACK, 0.55 + far * 0.5),
-        dead: mix(baseHex, GREY, 0.55),
-        deadLine: mix(baseHex, BLACK, 0.7),
-      });
-    }
+    const body = tint(u.spec.colors.body, u.id, 0.5);
+    const accent = tint(u.spec.colors.accent, u.id * 7 + 3, 0.9);
+    const base = FIXED[p] ?? (p === "accent" ? accent : p === "dark" ? mix(body, BLACK, 0.55) : body);
+    const far = layer === 0 ? 0.22 : 0;
+    const c: Colors = {
+      fill: mix(base, BLACK, far),
+      line: mix(base, BLACK, 0.55 + far * 0.5),
+      dead: mix(base, GREY, 0.55),
+      deadLine: mix(base, BLACK, 0.7),
+    };
+    this.colors.set(k, c);
+    return c;
   }
 
   resize(): void {
@@ -67,7 +90,7 @@ export class Renderer {
     if (!isFinite(lo)) [lo, hi] = [-8, 8];
     const w = this.canvas.width, h = this.canvas.height;
     const span = Math.max(7, hi - lo + 3);
-    const scale = Math.min(w / span, (h * 0.78) / Math.max(3, top + 1));
+    const scale = Math.min(w / span, (h * 0.62) / Math.max(3, top + 1));
     const cx = (lo + hi) / 2;
     const k = this.cam.ready ? 0.06 : 1;
     this.cam.x += (cx - this.cam.x) * k;
@@ -106,11 +129,14 @@ export class Renderer {
     ctx.fillRect(0, groundY, w, h - groundY);
     ctx.fillStyle = "#6a8f41";
     ctx.fillRect(0, groundY, w, Math.max(2, s * 0.06));
-    // Walls, if in view.
-    ctx.fillStyle = "#8a6f52";
+    // Arena edges: rock cliffs, rarely in view.
     for (const side of [-1, 1]) {
       const wx = X(side * b.arenaHalf);
-      ctx.fillRect(side < 0 ? wx - s : wx, 0, s, groundY);
+      const x0 = side < 0 ? wx - s * 3 : wx;
+      ctx.fillStyle = "#8f8a80";
+      ctx.fillRect(x0, groundY - s * 6, s * 3, s * 6);
+      ctx.fillStyle = "#77726a";
+      ctx.fillRect(x0, groundY - s * 6, s * 3, s * 0.4);
     }
 
     // Shadows.
@@ -128,46 +154,54 @@ export class Renderer {
     const outline = Math.max(1.5, s * 0.025);
     // Dead bodies first, then the living on top.
     for (const pass of [false, true]) {
-      for (const d of this.order) {
-        if (d.unit.alive !== pass) continue;
-        const c = d.collider;
-        const t = c.translation();
-        const a = c.rotation();
-        const col = this.colors.get(d)!;
-        const fill = pass ? col.fill : col.dead;
-        const line = pass ? col.line : col.deadLine;
-        const x = X(t.x), y = Y(t.y);
-        const sh = d.bp.shape;
-        if (sh.kind === "capsule") {
-          const dx = -Math.sin(a) * sh.hh * s, dy = -Math.cos(a) * sh.hh * s;
-          ctx.strokeStyle = line;
-          ctx.lineWidth = sh.r * 2 * s + outline * 2;
-          ctx.beginPath();
-          ctx.moveTo(x - dx, y - dy);
-          ctx.lineTo(x + dx, y + dy);
-          ctx.stroke();
-          ctx.strokeStyle = fill;
-          ctx.lineWidth = sh.r * 2 * s;
-          ctx.stroke();
-        } else if (sh.kind === "ball") {
-          ctx.fillStyle = line;
-          ctx.beginPath();
-          ctx.arc(x, y, sh.r * s + outline, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = fill;
-          ctx.beginPath();
-          ctx.arc(x, y, sh.r * s, 0, Math.PI * 2);
-          ctx.fill();
-          if (d.eye) this.eye(x, y, sh.r * s, a, d.unit.facing, pass);
+      for (const it of this.items) {
+        if (it.unit.alive !== pass) continue;
+        if (it.kind === "col") {
+          const { collider: c, bp } = it.d;
+          const t = c.translation();
+          const col = this.paint(it.unit, bp.paint, it.d.layer);
+          this.shape(bp.shape, X(t.x), Y(t.y), c.rotation(), s, pass ? col.fill : col.dead, pass ? col.line : col.deadLine, outline);
+          if (it.d.eye && bp.shape.kind === "ball") this.ballEye(X(t.x), Y(t.y), bp.shape.r * s, c.rotation(), it.unit.facing, pass);
         } else {
-          ctx.save();
-          ctx.translate(x, y);
-          ctx.rotate(-a);
-          ctx.fillStyle = line;
-          ctx.fillRect(-sh.hx * s - outline, -sh.hy * s - outline, sh.hx * 2 * s + outline * 2, sh.hy * 2 * s + outline * 2);
-          ctx.fillStyle = fill;
-          ctx.fillRect(-sh.hx * s, -sh.hy * s, sh.hx * 2 * s, sh.hy * 2 * s);
-          ctx.restore();
+          const { body, d } = it.d;
+          const t = body.translation();
+          const A = body.rotation();
+          const ca = Math.cos(A), sa = Math.sin(A);
+          const wx = t.x + d.offset[0] * ca - d.offset[1] * sa;
+          const wy = t.y + d.offset[0] * sa + d.offset[1] * ca;
+          if (d.paint === "eye" && d.shape.kind === "ball") {
+            this.eye(X(wx), Y(wy), d.shape.r * s, it.unit.facing, pass);
+            continue;
+          }
+          if (d.paint === "shine") {
+            if (!pass || d.shape.kind !== "ball") continue;
+            ctx.fillStyle = "rgba(255,255,255,0.35)";
+            ctx.beginPath();
+            ctx.arc(X(wx), Y(wy), d.shape.r * s, 0, Math.PI * 2);
+            ctx.fill();
+            continue;
+          }
+          const col = this.paint(it.unit, d.paint, it.d.layer);
+          const ang = A + d.rot;
+          if (d.shape.kind === "tri") {
+            // Triangle points are body-local; rotate by deco rot, then by the body.
+            const cr = Math.cos(d.rot), sr = Math.sin(d.rot);
+            ctx.beginPath();
+            d.shape.pts.forEach(([px, py], i) => {
+              const lx = d.offset[0] + px * cr - py * sr, ly = d.offset[1] + px * sr + py * cr;
+              const qx = X(t.x + lx * ca - ly * sa), qy = Y(t.y + lx * sa + ly * ca);
+              if (i === 0) ctx.moveTo(qx, qy);
+              else ctx.lineTo(qx, qy);
+            });
+            ctx.closePath();
+            ctx.lineWidth = outline * 2;
+            ctx.strokeStyle = pass ? col.line : col.deadLine;
+            ctx.stroke();
+            ctx.fillStyle = pass ? col.fill : col.dead;
+            ctx.fill();
+          } else {
+            this.shape(d.shape, X(wx), Y(wy), ang, s, pass ? col.fill : col.dead, pass ? col.line : col.deadLine, outline);
+          }
         }
       }
     }
@@ -178,7 +212,7 @@ export class Renderer {
       const hp = Math.max(0, u.health / u.maxHealth);
       const head = u.bodies.get(u.bp.head)!.translation();
       const bw = Math.max(30, u.spec.size * 0.6 * s);
-      const bx = X(head.x) - bw / 2, by = Y(head.y + u.spec.size * 0.22) - 6;
+      const bx = X(head.x) - bw / 2, by = Y(head.y + u.spec.size * 0.3) - 6;
       ctx.fillStyle = "rgba(20,16,24,0.55)";
       ctx.fillRect(bx - 1, by - 1, bw + 2, 7);
       ctx.fillStyle = hp > 0.5 ? "#7ddc6a" : hp > 0.25 ? "#f2c14e" : "#e5533d";
@@ -186,11 +220,50 @@ export class Renderer {
     }
   }
 
-  private eye(x: number, y: number, r: number, a: number, facing: number, alive: boolean): void {
+  private shape(sh: DecoShape, x: number, y: number, a: number, s: number, fill: string, line: string, outline: number): void {
     const ctx = this.ctx;
+    if (sh.kind === "capsule") {
+      const dx = -Math.sin(a) * sh.hh * s, dy = -Math.cos(a) * sh.hh * s;
+      ctx.strokeStyle = line;
+      ctx.lineWidth = sh.r * 2 * s + outline * 2;
+      ctx.beginPath();
+      ctx.moveTo(x - dx, y - dy);
+      ctx.lineTo(x + dx, y + dy);
+      ctx.stroke();
+      ctx.strokeStyle = fill;
+      ctx.lineWidth = sh.r * 2 * s;
+      ctx.stroke();
+    } else if (sh.kind === "ball") {
+      ctx.fillStyle = line;
+      ctx.beginPath();
+      ctx.arc(x, y, sh.r * s + outline, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = fill;
+      ctx.beginPath();
+      ctx.arc(x, y, sh.r * s, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (sh.kind === "box") {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(-a);
+      ctx.fillStyle = line;
+      ctx.fillRect(-sh.hx * s - outline, -sh.hy * s - outline, sh.hx * 2 * s + outline * 2, sh.hy * 2 * s + outline * 2);
+      ctx.fillStyle = fill;
+      ctx.fillRect(-sh.hx * s, -sh.hy * s, sh.hx * 2 * s, sh.hy * 2 * s);
+      ctx.restore();
+    }
+  }
+
+  /** Eye placed on the face of a round head. */
+  private ballEye(x: number, y: number, r: number, a: number, facing: number, alive: boolean): void {
     const ex = x + Math.cos(-a) * facing * r * 0.42 - Math.sin(-a) * -r * 0.15;
     const ey = y + Math.sin(-a) * facing * r * 0.42 + Math.cos(-a) * -r * 0.15;
-    const er = Math.max(1.5, r * 0.22);
+    this.eye(ex, ey, Math.max(1.5, r * 0.22), facing, alive);
+  }
+
+  private eye(ex: number, ey: number, er: number, facing: number, alive: boolean): void {
+    const ctx = this.ctx;
+    er = Math.max(1.5, er);
     if (alive) {
       ctx.fillStyle = "#fff";
       ctx.beginPath();
