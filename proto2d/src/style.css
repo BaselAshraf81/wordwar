@@ -12,10 +12,21 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #9ad0ec; }
 
 .bar {
   position: fixed; top: 12px; left: 16px; right: 16px;
-  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap;
 }
+.banner.refused { font-size: 20px; }
 h1 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }
 h1 span { color: var(--right); }
+.armies { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.armies input {
+  font: inherit; font-size: 15px; font-weight: 650; width: min(220px, 34vw);
+  padding: 6px 12px; border-radius: 999px; border: 2px solid var(--ink); background: var(--paper); color: var(--ink);
+}
+.armies input:focus-visible { outline: 3px solid #f2c14e; outline-offset: 2px; }
+.armies .vs { font-weight: 800; }
+#fight { background: var(--right); color: var(--paper); }
+#fight:disabled { opacity: 0.6; cursor: progress; }
+.side i { font-style: normal; font-size: 12px; opacity: 0.7; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 select {
   font: inherit; font-size: 15px; font-weight: 650; max-width: min(420px, 60vw);
@@ -36,7 +47,7 @@ button:focus-visible { outline: 3px solid #f2c14e; outline-offset: 2px; }
 button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
 
 .score {
-  position: fixed; top: 64px; left: 50%; transform: translateX(-50%);
+  position: fixed; top: 110px; left: 50%; transform: translateX(-50%);
   display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 14px;
   width: min(760px, calc(100% - 32px));
 }

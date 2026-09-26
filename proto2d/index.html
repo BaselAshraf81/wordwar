@@ -11,15 +11,21 @@
     <canvas id="stage" aria-label="Battle view"></canvas>
     <header class="bar">
       <h1>word<span>war</span></h1>
+      <form id="armies" class="armies" autocomplete="off">
+        <label><span class="sr">Left army</span><input id="left" maxlength="80" placeholder="100 men" required /></label>
+        <span class="vs">vs</span>
+        <label><span class="sr">Right army</span><input id="right" maxlength="80" placeholder="1 gorilla" required /></label>
+        <button id="fight" type="submit">Fight</button>
+      </form>
       <label class="pick">
-        <span class="sr">Matchup</span>
-        <select id="matchups"></select>
+        <span class="sr">Example matchups</span>
+        <select id="matchups"><option value="">Examples…</option></select>
       </label>
     </header>
     <section class="score" aria-live="polite">
-      <div class="side left"><b id="lname"></b><span id="lcount"></span></div>
+      <div class="side left"><b id="lname"></b><span id="lcount"></span><i id="lspec"></i></div>
       <div class="clock" id="clock">0.0s</div>
-      <div class="side right"><b id="rname"></b><span id="rcount"></span></div>
+      <div class="side right"><b id="rname"></b><span id="rcount"></span><i id="rspec"></i></div>
     </section>
     <div class="banner" id="banner" hidden></div>
     <footer class="controls">
