@@ -50,6 +50,8 @@ export interface UnitSpec {
   features?: Partial<Features>;
   /** Emoji art rig id (src/art/rigs.json). When set, the body is fitted to the drawing. */
   art?: string;
+  /** Artist-rigged model id (src/models). Takes priority over art. */
+  model?: string;
 }
 
 const human = (over: Partial<UnitSpec>): UnitSpec => ({
@@ -78,7 +80,18 @@ export interface Matchup {
 }
 
 // Hand-written specs for the prototype. The AI step will produce exactly this shape.
+const animal = (label: string, model: string, count: number, size: number, weight: number, over: Partial<UnitSpec> = {}): UnitSpec => ({
+  label, count, plan: "quadruped", model, size, weight, strength: 1.5, toughness: 1.4, speed: 1.3, bravery: 0.9,
+  attack: "bite", weapon: "none", armor: 0.1, canFly: false, colors: { body: "#8d8f96", accent: "#2a2a2e" }, ...over,
+});
+
 export const MATCHUPS: Matchup[] = [
+  {
+    id: "wolves",
+    title: "a pack of wolves vs 3 big dogs",
+    left: animal("a pack of wolves", "wolf", 8, 1.5, 40),
+    right: animal("3 big dogs", "dog", 3, 1.4, 45, { strength: 1.4, bravery: 0.7 }),
+  },
   {
     id: "gorilla",
     title: "100 men vs 1 gorilla",

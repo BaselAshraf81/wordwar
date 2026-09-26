@@ -1,3 +1,4 @@
+import { ModelView } from "./model-view";
 import { Renderer } from "./render";
 import { Battle, DT, initPhysics } from "./sim/battle";
 import { MATCHUPS, type UnitSpec } from "./sim/spec";
@@ -5,6 +6,8 @@ import { MATCHUPS, type UnitSpec } from "./sim/spec";
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>("stage");
 const renderer = new Renderer(canvas);
+const models = new ModelView($<HTMLCanvasElement>("models"));
+renderer.hideUnit = (u) => models.shows(u);
 
 let battle: Battle | null = null;
 let specs: [UnitSpec, UnitSpec] = [MATCHUPS[0].left, MATCHUPS[0].right];
@@ -62,6 +65,7 @@ function start(): void {
   battle?.dispose();
   battle = new Battle(specs, seed);
   renderer.attach(battle);
+  models.attach(battle);
   acc = 0;
   writeHash();
   $("lname").textContent = specs[0].label;
@@ -158,6 +162,8 @@ function loop(now: number): void {
   }
   if (battle) {
     renderer.render(battle);
+    const v = renderer.view;
+    models.render(v.x, v.scale, v.groundY, v.w, v.h);
     hud(battle);
   }
   requestAnimationFrame(loop);
@@ -203,13 +209,17 @@ async function main(): Promise<void> {
       e.preventDefault();
     }
   });
-  addEventListener("resize", () => renderer.resize());
+  const resize = () => {
+    renderer.resize();
+    models.resize(canvas.width, canvas.height);
+  };
+  addEventListener("resize", resize);
   addEventListener("hashchange", () => {
     readHash();
     start();
   });
 
-  renderer.resize();
+  resize();
   await initPhysics();
   readHash();
   start();

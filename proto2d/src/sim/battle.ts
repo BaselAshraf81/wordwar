@@ -325,7 +325,7 @@ export class Battle {
       const ay = G + Math.max(-8, Math.min(8, 6 * (hy - p.y) - 3 * v.y));
       const ax = Math.max(-10, Math.min(10, 4 * (u.fleeing ? dir * 5 : ex) - 2.5 * v.x)) * s.speed;
       torso.applyImpulse({ x: u.mass * ax * DT, y: u.mass * ay * DT }, true);
-    } else if (grounded && u.bp.legs.length > 0) {
+    } else if (grounded && (u.bp.legs.length > 0 || u.bp.model)) {
       // Height assist: holds the body up only while its feet are on something.
       const ay = G + 30 * (u.bp.standY - p.y) - 6 * v.y;
       const fy = Math.max(0, Math.min(2.2 * G, ay)) * stun;
@@ -377,6 +377,21 @@ export class Battle {
         if (id === "neck" && u.strikeT > 0) return;
         this.servo(u, id, wamp * Math.sin(2 * Math.PI * u.phase * 1.5 - i * 1.1));
       });
+    }
+    if (u.bp.model) {
+      // Artist animation: every joint chases the clip's angle at this phase. Physics adds the wobble.
+      const clips = u.bp.model.model.clips;
+      const clip = (moving ? clips.Walking ?? clips.Run : clips.Idle) ?? Object.values(clips)[0];
+      const t = (((moving ? u.phase : u.phase * 0.5) % 1) + 1) % 1 * clip.length;
+      const i0 = Math.floor(t) % clip.length, i1 = (i0 + 1) % clip.length, w = t - Math.floor(t);
+      const striking = u.strikeT > 0, windup = u.strikeT > STRIKE_AT;
+      for (const b of u.bp.model.model.bones) {
+        if (!u.joints.has(b.name)) continue;
+        let a = (clip[i0][b.name] ?? 0) * (1 - w) + (clip[i1][b.name] ?? 0) * w;
+        // No attack clip in this pack: a bite is the neck rearing back, then snapping down.
+        if (striking && (b.role === "neck" || b.role === "head")) a = windup ? 0.35 : -0.55;
+        this.servo(u, b.name, u.facing * a);
+      }
     }
     if (s.plan === "wheeled") {
       for (const w of ["wheelB", "wheelF"]) {

@@ -1,6 +1,7 @@
 // Body plans as data. One builder per plan turns a UnitSpec into a blueprint;
 // battle.ts turns any blueprint into Rapier bodies. Nothing here reads spec.label.
 import { RIG_BY_ID, type ArtRig } from "../art/rigs";
+import { MODEL_BY_ID, type BoneRole, type Model } from "../models/models";
 import { featuresOf, type Features, type UnitSpec, type Weapon } from "./spec";
 
 export type Shape =
@@ -67,6 +68,7 @@ export interface Blueprint {
   /** Spine joints that undulate, head to tail. */
   wave?: string[];
   art?: ArtLayout;
+  model?: ModelLayout;
 }
 
 type Part = Partial<ColliderBP> & { shape: Shape };
@@ -490,6 +492,8 @@ function wheeled(s: UnitSpec, f: number): Blueprint {
 export const CHEAP_ABOVE = 30;
 
 export function buildBlueprint(s: UnitSpec, facing: 1 | -1, crowd: number): Blueprint {
+  const model = s.model ? MODEL_BY_ID.get(s.model) : undefined;
+  if (model) return modelBody(s, facing, model);
   const rig = s.art ? RIG_BY_ID.get(s.art) : undefined;
   if (rig) return artBody(s, facing, rig);
   switch (s.plan) {
@@ -609,5 +613,64 @@ export function artBody(s: UnitSpec, f: number, rig: ArtRig): Blueprint & { art:
     move: rig.plan === "fish" ? "flop" : undefined,
     wave: rig.plan === "fish" ? ["neck", "spine1"].filter((j) => joints.some((q) => q.id === j)) : undefined,
     art: { rig, k, flip, cx, piece: ["torso", head, tail], showLegs: legged && !stubby },
+  };
+}
+
+// ---------- artist-rigged models: one physics body per bone ----------
+
+export interface ModelLayout {
+  model: Model;
+  scale: number; // metres per model unit
+  flip: 1 | -1;
+  /** Physics body id -> its spawn centre in unit-local metres (unit origin at feet). */
+  centre: Record<string, [number, number]>;
+}
+
+const ROLE_JOINT: Record<BoneRole, JointRole> = { torso: "spine", spine: "spine", neck: "neck", head: "neck", tail: "tail", leg: "hip", foot: "knee" };
+
+export function modelBody(s: UnitSpec, f: 1 | -1, model: Model): Blueprint & { model: ModelLayout } {
+  const k = s.size / model.length;
+  const P = (p: [number, number]): [number, number] => [p[0] * k * f, p[1] * k];
+  const segs: SegmentBP[] = [];
+  const joints: JointBP[] = [];
+  const centre: Record<string, [number, number]> = {};
+  const byName = new Map(model.bones.map((b) => [b.name, b]));
+  for (const b of model.bones) {
+    if (b.role === "foot") continue;
+    const A = P(b.a), B = P(b.b);
+    const L = Math.hypot(B[0] - A[0], B[1] - A[1]);
+    const r = b.r * k;
+    const th = Math.atan2(B[1] - A[1], B[0] - A[0]);
+    const mid: [number, number] = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
+    const cols: ColliderBP[] = [
+      col({
+        shape: { kind: "capsule", hh: Math.max(0.005, L / 2 - r * 0.5), r },
+        rot: th - Math.PI / 2,
+        sharp: b.role === "head" ? 1.8 : b.role === "leg" ? 0.8 : 0.4,
+        striker: b.role === "head",
+        densityMul: b.role === "tail" ? 0.4 : 1,
+      }),
+    ];
+    // Paws ride on their shin as a small foot collider, so the foot touches the ground.
+    for (const ft of model.bones.filter((x) => x.role === "foot" && x.parent === b.name)) {
+      const fa = P(ft.a), fb = P(ft.b);
+      const fr = Math.max(0.01, ft.r * k * 0.8);
+      cols.push(col({ shape: { kind: "ball", r: fr }, offset: [(fa[0] + fb[0]) / 2 - mid[0], fr - mid[1] + 0.001], foot: true, sharp: 0.8 }));
+    }
+    const tDepth = byName.get(model.torso)!.depth;
+    segs.push({ id: b.name, pos: mid, layer: b.role === "leg" ? (b.depth > tDepth ? 0 : 2) : 1, colliders: cols });
+    centre[b.name] = mid;
+    if (b.parent && byName.has(b.parent)) {
+      const lim = b.limits;
+      joints.push({ id: b.name, a: b.parent, b: b.name, at: A, limits: f > 0 ? lim : [-lim[1], -lim[0]], role: ROLE_JOINT[b.role], torqueMul: b.role === "leg" ? 1.3 : 1 });
+    }
+  }
+  const torso = segs.find((q) => q.id === model.torso)!;
+  const head = segs.find((q) => q.id === model.head)!;
+  return {
+    segments: segs, joints, torso: model.torso, head: model.head, strikeSeg: model.head,
+    standY: torso.pos[1], reach: Math.abs(head.pos[0] - torso.pos[0]) + 0.25 * s.size,
+    halfWidth: 0.3 * s.size, legs: [], arms: [],
+    model: { model, scale: k, flip: f, centre },
   };
 }

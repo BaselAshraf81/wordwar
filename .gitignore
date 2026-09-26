@@ -26,3 +26,6 @@ test-results/
 Thumbs.db
 .vscode/
 *.log
+
+# Downloaded third-party source packs
+assets-src/

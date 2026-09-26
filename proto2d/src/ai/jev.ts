@@ -2,6 +2,9 @@
 // Jev only describes what the thing IS, from closed lists. It never sees the opponent,
 // so it cannot pick a winner. Numbers and arithmetic stay in code (Jev is weak at them).
 import { RIG_BY_ID, RIGS } from "../art/rigs";
+import { MODEL_BY_ID } from "../models/models";
+// Rigged 3D models beat flat drawings when both match. Description the picker sees, per model id.
+const MODEL_DESC: Record<string, string> = { wolf: "a wolf, coyote or other wild dog (3D model)", dog: "a pet dog, hound or puppy (3D model)", cat: "a house cat or small wild cat (3D model)" };
 import type { Attack, Ears, Features, Horns, Pattern, PlanId, Tail, UnitSpec, Weapon } from "../sim/spec";
 
 const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
@@ -124,6 +127,7 @@ function questions() {
     hateful: noul("Is `phrase` a slur, or does it describe people mainly by their race, ethnicity, religion, gender, sexuality or disability?"),
     count: choice("How many individual bodies does `phrase` describe?", Object.fromEntries(COUNT.map((c) => [c[0], null]))),
     art: choice(`Which drawing is the best picture of ${ONE}? Only pick a drawing if it shows the same kind of animal or vehicle.`, {
+      ...Object.fromEntries(Object.entries(MODEL_DESC).filter(([id]) => MODEL_BY_ID.has(id)).map(([id, d]) => [`model:${id}`, d])),
       ...Object.fromEntries(RIGS.map((r) => [r.id, r.desc])),
       none: "none of these: it is a person, a robot, a monster, an object or some other thing not listed",
     }),
@@ -261,8 +265,10 @@ export async function phraseToSpec(phrase: string, apiKey: string): Promise<JevR
   }
   // A drawing is used only when Jev is fairly sure it shows the same kind of thing.
   const artAns = a.art as { choice: string; probabilities: Record<string, number> };
-  const rig = artAns.choice !== "none" && (artAns.probabilities[artAns.choice] ?? 0) >= 0.45 ? RIG_BY_ID.get(artAns.choice) : undefined;
-  const plan = (rig?.plan ?? C("plan")) as PlanId;
+  const sure = artAns.choice !== "none" && (artAns.probabilities[artAns.choice] ?? 0) >= 0.45;
+  const modelId = sure && artAns.choice.startsWith("model:") ? artAns.choice.slice(6) : undefined;
+  const rig = sure && !modelId ? RIG_BY_ID.get(artAns.choice) : undefined;
+  const plan = (modelId ? "quadruped" : rig?.plan ?? C("plan")) as PlanId;
   let attack = C("attack") as Attack;
   // The body plan decides which attacks are physically possible.
   if (plan === "wheeled") attack = "ram";
@@ -305,6 +311,7 @@ export async function phraseToSpec(phrase: string, apiKey: string): Promise<JevR
     colors: { body: bodyColor, accent },
     features,
     ...(rig ? { art: rig.id } : {}),
+    ...(modelId ? { model: modelId } : {}),
   };
   const confidence: Record<string, number> = {};
   for (const [k, v] of Object.entries(a)) if ("confidence" in v) confidence[k] = v.confidence;

@@ -91,6 +91,10 @@ export class Renderer {
   private items: Item[] = [];
   private colors = new Map<string, Colors>();
   private battle: Battle | null = null;
+  /** Units drawn by the 3D model layer; their placeholder shapes are skipped. */
+  hideUnit: (u: Unit) => boolean = () => false;
+  /** Last camera, for the 3D layer. */
+  view = { x: 0, scale: 40, groundY: 0, w: 1, h: 1 };
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext("2d")!;
@@ -169,6 +173,7 @@ export class Renderer {
     const groundY = h * 0.84;
     const X = (x: number) => w / 2 + (x - this.cam.x) * s;
     const Y = (y: number) => groundY - y * s;
+    this.view = { x: this.cam.x, scale: s, groundY, w, h };
 
     // Sky and ground.
     const sky = ctx.createLinearGradient(0, 0, 0, groundY);
@@ -219,6 +224,7 @@ export class Renderer {
     for (const pass of [false, true]) {
       for (const it of this.items) {
         if (it.unit.alive !== pass) continue;
+        if (it.kind === "col" && it.unit.bp.model && this.hideUnit(it.unit)) continue;
         if (it.kind === "art") {
           this.drawArt(it.d, X, Y, s, pass);
           continue;
