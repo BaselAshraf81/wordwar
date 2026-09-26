@@ -480,7 +480,11 @@ export class Battle {
 
   private hit(attacker: Unit, victim: Unit, sharp: number, impulse: number): void {
     const dv = impulse / victim.mass;
-    const dmg = DAMAGE * sharp * dv * (1 - victim.spec.armor) * Math.sqrt(attacker.spec.strength);
+    // Soft threshold: blows well below what the victim can shrug off do almost nothing
+    // (a man's punch on a gorilla), blows well above it count nearly in full.
+    const shrug = 0.15 * victim.spec.toughness * (1 + victim.spec.armor);
+    const eff = (dv * dv) / (dv + shrug);
+    const dmg = DAMAGE * sharp * eff * (1 - victim.spec.armor * 0.5) * Math.sqrt(attacker.spec.strength);
     victim.health -= dmg;
     attacker.hits++;
     attacker.dealt += dmg;
