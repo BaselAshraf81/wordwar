@@ -81,7 +81,7 @@ export class ModelView {
         const root = SkeletonUtils.clone(tpl.scene);
         const mats: THREE.MeshStandardMaterial[] = [];
         const bones: Instance["bones"] = [];
-        const byKey = new Map(lay.model.bones.map((mb) => [key(mb.name), mb]));
+        const byKey = new Map(Object.entries(lay.model.boneGroup).map(([bn, g]) => [key(bn), g]));
         root.traverse((o) => {
           const mesh = o as THREE.SkinnedMesh;
           if (mesh.isSkinnedMesh || (o as THREE.Mesh).isMesh) {
@@ -97,12 +97,12 @@ export class ModelView {
           }
           const bone = o as THREE.Bone;
           if (bone.isBone) {
-            const mb = byKey.get(bone.name);
+            const group = byKey.get(bone.name);
             const rest = tpl.rest.get(bone.name);
-            if (mb && rest) {
+            if (group && rest) {
               bone.matrixAutoUpdate = false;
               bone.matrixWorldAutoUpdate = false;
-              bones.push({ bone, body: mb.body, rest });
+              bones.push({ bone, body: group, rest });
             }
           }
         });

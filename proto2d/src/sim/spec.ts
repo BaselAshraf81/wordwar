@@ -90,7 +90,7 @@ export const MATCHUPS: Matchup[] = [
     id: "wolves",
     title: "a pack of wolves vs 3 big dogs",
     left: animal("a pack of wolves", "wolf", 8, 1.5, 40),
-    right: animal("3 big dogs", "dog", 3, 1.4, 45, { strength: 1.4, bravery: 0.7 }),
+    right: animal("3 big dogs", "husky", 3, 1.4, 45, { strength: 1.4, bravery: 0.7 }),
   },
   {
     id: "gorilla",

@@ -2,9 +2,7 @@
 // Jev only describes what the thing IS, from closed lists. It never sees the opponent,
 // so it cannot pick a winner. Numbers and arithmetic stay in code (Jev is weak at them).
 import { RIG_BY_ID, RIGS } from "../art/rigs";
-import { MODEL_BY_ID } from "../models/models";
-// Rigged 3D models beat flat drawings when both match. Description the picker sees, per model id.
-const MODEL_DESC: Record<string, string> = { wolf: "a wolf, coyote or other wild dog (3D model)", dog: "a pet dog, hound or puppy (3D model)", cat: "a house cat or small wild cat (3D model)" };
+import { MODEL_BY_ID, MODEL_DESC } from "../models/models";
 import type { Attack, Ears, Features, Horns, Pattern, PlanId, Tail, UnitSpec, Weapon } from "../sim/spec";
 
 const ENDPOINT = "https://api.typesafe.ai/v1/systemone";

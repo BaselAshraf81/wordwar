@@ -82,6 +82,8 @@ export interface Unit {
   hits: number;
   dealt: number;
   nextHop: number;
+  /** Torso angle the animation wants (a T-rex lunging forward), radians. */
+  leanTarget: number;
   hover: { x: number; y: number }; // flyers' personal station around the target
 }
 
@@ -199,6 +201,7 @@ export class Battle {
       dealt: 0,
       hover: { x: r.range(0.2, 1.6), y: r.range(-0.3, 1.4) },
       nextHop: r.range(0, 0.6),
+      leanTarget: 0,
     };
 
     const bodyOf = (seg: SegmentBP) => {
@@ -348,7 +351,7 @@ export class Battle {
     // Upright controller on the torso.
     const ang = torso.rotation();
     const inertia = u.mass * s.size * s.size * 0.08;
-    let tau = inertia * (-45 * ang - 9 * torso.angvel());
+    let tau = inertia * (-45 * (ang - u.leanTarget) - 9 * torso.angvel());
     const cap = u.mass * G * s.size * (s.plan === "wheeled" ? 0.2 : 0.7) * stun;
     tau = Math.max(-cap, Math.min(cap, tau));
     torso.applyTorqueImpulse(tau * DT, true);
@@ -393,18 +396,22 @@ export class Battle {
     }
     if (u.bp.model) {
       // Artist animation: every joint chases the clip's angle at this phase. Physics adds the wobble.
-      const clips = u.bp.model.model.clips;
-      const clip = (moving ? clips.Walking ?? clips.Run : clips.Idle) ?? Object.values(clips)[0];
-      const t = (((moving ? u.phase : u.phase * 0.5) % 1) + 1) % 1 * clip.length;
-      const i0 = Math.floor(t) % clip.length, i1 = (i0 + 1) % clip.length, w = t - Math.floor(t);
-      const striking = u.strikeT > 0, windup = u.strikeT > STRIKE_AT;
-      for (const b of u.bp.model.model.bones) {
-        if (!u.joints.has(b.name)) continue;
-        let a = (clip[i0][b.name] ?? 0) * (1 - w) + (clip[i1][b.name] ?? 0) * w;
-        // No attack clip in this pack: a bite is the neck rearing back, then snapping down.
-        if (striking && (b.role === "neck" || b.role === "head")) a = windup ? 0.35 : -0.55;
-        this.servo(u, b.name, u.facing * a);
+      const md = u.bp.model.model;
+      const clips = md.clips;
+      // While striking, the artist's attack clip plays once over the strike; otherwise gait or idle loops.
+      const atk = md.attacks.includes(s.attack === "kick" ? "kick" : s.attack === "charge" ? "headbutt" : "attack")
+        ? (s.attack === "kick" ? "kick" : s.attack === "charge" ? "headbutt" : "attack")
+        : md.attacks[0];
+      const striking = u.strikeT > 0 && atk !== undefined;
+      const clip = (striking ? clips[atk!] : moving ? (s.speed > 1.1 ? clips.run ?? clips.walk : clips.walk ?? clips.run) : clips.idle) ?? clips.walk!;
+      const ph = striking ? (STRIKE_LEN - u.strikeT) / STRIKE_LEN : moving ? u.phase : u.phase * 0.3;
+      const t = (((ph % 1) + 1) % 1) * clip.length;
+      const i0 = Math.floor(t) % clip.length, i1 = striking ? Math.min(clip.length - 1, i0 + 1) : (i0 + 1) % clip.length, w = t - Math.floor(t);
+      for (const g of md.groups) {
+        if (!u.joints.has(g.id)) continue;
+        this.servo(u, g.id, u.facing * ((clip[i0][g.id] ?? 0) * (1 - w) + (clip[i1][g.id] ?? 0) * w));
       }
+      u.leanTarget = u.facing * ((clip[i0]._rootA ?? 0) * (1 - w) + (clip[i1]._rootA ?? 0) * w);
     }
     if (s.plan === "wheeled") {
       for (const w of ["wheelB", "wheelF"]) {

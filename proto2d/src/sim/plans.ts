@@ -1,7 +1,7 @@
 // Body plans as data. One builder per plan turns a UnitSpec into a blueprint;
 // battle.ts turns any blueprint into Rapier bodies. Nothing here reads spec.label.
 import { RIG_BY_ID, type ArtRig } from "../art/rigs";
-import { MODEL_BY_ID, type BoneRole, type Model } from "../models/models";
+import { MODEL_BY_ID, type GroupRole, type Model } from "../models/models";
 import { featuresOf, type Features, type UnitSpec, type Weapon } from "./spec";
 
 export type Shape =
@@ -616,7 +616,7 @@ export function artBody(s: UnitSpec, f: number, rig: ArtRig): Blueprint & { art:
   };
 }
 
-// ---------- artist-rigged models: one physics body per bone ----------
+// ---------- artist-rigged models: one physics body per bone group ----------
 
 export interface ModelLayout {
   model: Model;
@@ -626,7 +626,7 @@ export interface ModelLayout {
   centre: Record<string, [number, number]>;
 }
 
-const ROLE_JOINT: Record<BoneRole, JointRole> = { torso: "spine", spine: "spine", neck: "neck", head: "neck", tail: "tail", leg: "hip", foot: "knee" };
+const ROLE_JOINT: Record<GroupRole, JointRole> = { torso: "spine", neck: "neck", head: "neck", leg: "hip", tail: "tail", limb: "shoulder" };
 
 export function modelBody(s: UnitSpec, f: 1 | -1, model: Model): Blueprint & { model: ModelLayout } {
   const k = s.size / model.length;
@@ -634,43 +634,46 @@ export function modelBody(s: UnitSpec, f: 1 | -1, model: Model): Blueprint & { m
   const segs: SegmentBP[] = [];
   const joints: JointBP[] = [];
   const centre: Record<string, [number, number]> = {};
-  const byName = new Map(model.bones.map((b) => [b.name, b]));
-  for (const b of model.bones) {
-    if (b.role === "foot") continue;
-    const A = P(b.a), B = P(b.b);
+  const torsoDepth = model.groups.find((g) => g.role === "torso")!.depth;
+  const H = model.height * k;
+  const isFoot = (id: string) => model.groups.find((g) => g.id === id)!.role === "leg" && !model.groups.some((c) => c.parent === id);
+  for (const g of model.groups) {
+    const A = P(g.a), B = P(g.b);
     const L = Math.hypot(B[0] - A[0], B[1] - A[1]);
-    const r = b.r * k;
+    const cap = g.role === "torso" ? 0.6 : g.role === "head" || g.role === "neck" ? 0.5 : 0.3;
+    const r = Math.max(0.02 * H, Math.min(g.r * k * 0.85, cap * Math.max(L, 0.15 * H)));
     const th = Math.atan2(B[1] - A[1], B[0] - A[0]);
     const mid: [number, number] = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
+    const foot = isFoot(g.id);
     const cols: ColliderBP[] = [
       col({
-        shape: { kind: "capsule", hh: Math.max(0.005, L / 2 - r * 0.5), r },
+        shape: { kind: "capsule", hh: Math.max(0.005, L / 2 - r * 0.3), r },
         rot: th - Math.PI / 2,
-        sharp: b.role === "head" ? 1.8 : b.role === "leg" ? 0.8 : 0.4,
-        striker: b.role === "head",
-        densityMul: b.role === "tail" ? 0.4 : 1,
+        sharp: g.role === "head" ? 1.8 : g.role === "leg" ? 0.9 : 0.4,
+        striker: g.role === "head" || foot || g.role === "limb",
+        densityMul: g.role === "tail" ? 0.4 : 1,
+        foot,
       }),
     ];
-    // Paws ride on their shin as a small foot collider, so the foot touches the ground.
-    for (const ft of model.bones.filter((x) => x.role === "foot" && x.parent === b.name)) {
-      const fa = P(ft.a), fb = P(ft.b);
-      const fr = Math.max(0.01, ft.r * k * 0.8);
-      cols.push(col({ shape: { kind: "ball", r: fr }, offset: [(fa[0] + fb[0]) / 2 - mid[0], fr - mid[1] + 0.001], foot: true, sharp: 0.8 }));
+    if (foot) {
+      const low = A[1] < B[1] ? A : B;
+      const fr = Math.max(0.015 * H, r);
+      cols.push(col({ shape: { kind: "ball", r: fr }, offset: [low[0] - mid[0], fr - mid[1] + 0.001], foot: true, sharp: 0.9, striker: true }));
     }
-    const tDepth = byName.get(model.torso)!.depth;
-    segs.push({ id: b.name, pos: mid, layer: b.role === "leg" ? (b.depth > tDepth ? 0 : 2) : 1, colliders: cols });
-    centre[b.name] = mid;
-    if (b.parent && byName.has(b.parent)) {
-      const lim = b.limits;
-      joints.push({ id: b.name, a: b.parent, b: b.name, at: A, limits: f > 0 ? lim : [-lim[1], -lim[0]], role: ROLE_JOINT[b.role], torqueMul: b.role === "leg" ? 1.3 : 1 });
+    segs.push({ id: g.id, pos: mid, layer: g.role === "leg" || g.role === "limb" ? (g.depth > torsoDepth ? 0 : 2) : 1, colliders: cols });
+    centre[g.id] = mid;
+    if (g.parent) {
+      const lim = model.limits[g.id];
+      joints.push({ id: g.id, a: g.parent, b: g.id, at: A, limits: f > 0 ? lim : [-lim[1], -lim[0]], role: ROLE_JOINT[g.role], torqueMul: g.role === "leg" ? 1.4 : 1 });
     }
   }
-  const torso = segs.find((q) => q.id === model.torso)!;
-  const head = segs.find((q) => q.id === model.head)!;
+  const torso = segs.find((q) => q.id === "torso")!;
+  const head = segs.find((q) => q.id === "head")!;
+  const xs = segs.map((q) => q.pos[0]);
   return {
-    segments: segs, joints, torso: model.torso, head: model.head, strikeSeg: model.head,
-    standY: torso.pos[1], reach: Math.abs(head.pos[0] - torso.pos[0]) + 0.25 * s.size,
-    halfWidth: 0.3 * s.size, legs: [], arms: [],
+    segments: segs, joints, torso: "torso", head: "head", strikeSeg: "head",
+    standY: torso.pos[1], reach: Math.abs(head.pos[0] - torso.pos[0]) + 0.2 * s.size,
+    halfWidth: (Math.max(...xs) - Math.min(...xs)) / 2, legs: [], arms: [],
     model: { model, scale: k, flip: f, centre },
   };
 }

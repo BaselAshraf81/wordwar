@@ -1,1 +1,1 @@
-3D models: Animal Pack Vol.2 by Quaternius (https://quaternius.com), via OpenGameArt. Released CC0 / free for commercial use. Exported unmodified apart from removing IK helper bones.
+3D models: Quaternius (https://quaternius.com) Ultimate Animated Animals and Animated Dinosaur Pack, CC0. Exported with blender/export_models.py (rest pose, IK helpers re-parented).
