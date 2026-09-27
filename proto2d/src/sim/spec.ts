@@ -1,18 +1,28 @@
 // UnitSpec: the only thing the AI produces. See docs/unit-spec.md.
+// Jev fills a Genome (what the thing IS: body, movement, attacks, weaknesses) from closed
+// lists; code turns it into physics. Nothing the AI writes can pick a winner.
+import baked from "./presets.json";
 
 export type PlanId = "biped" | "quadruped" | "bird" | "wheeled" | "fish" | "snake" | "bug" | "blob";
+export type Attack = "punch" | "kick" | "bite" | "peck" | "charge" | "slash" | "ram";
+export type Weapon = "none" | "sword" | "knife" | "club" | "spear";
+
+// ---- look ----
 export type Ears = "none" | "round" | "pointy" | "long";
 export type Horns = "none" | "short" | "long" | "antlers" | "tusks";
 export type Tail = "none" | "short" | "long" | "bushy";
 export type Pattern = "plain" | "stripes" | "spots";
+export type Face = "human" | "animal" | "robot" | "skull" | "monster";
+export type Eyes = "normal" | "angry" | "big" | "one" | "three" | "glowing";
+export type Mouth = "smile" | "fangs" | "frown" | "beak" | "none";
+export type Headwear = "none" | "helmet" | "crown" | "tophat" | "wizard" | "spiky_hair" | "long_hair" | "halo" | "cap";
 
-/** Shape features. Jev picks them from closed lists; code turns them into geometry. */
 export interface Features {
-  bodyLength: number; // ~0.75–1.4, multiplier
-  legLength: number; // ~0.55–1.45
-  neckLength: number; // ~0.8–3.2 (3 = giraffe)
-  bulk: number; // ~0.75–1.5
-  snout: number; // 0 flat face … 1.1 crocodile jaws
+  bodyLength: number;
+  legLength: number;
+  neckLength: number;
+  bulk: number;
+  snout: number; // 0 flat face .. 1.1 crocodile jaws
   ears: Ears;
   horns: Horns;
   tail: Tail;
@@ -20,23 +30,81 @@ export interface Features {
   spikes: boolean;
   mane: boolean;
   pattern: Pattern;
-  legs: 6 | 8; // bugs only
+  legs: 6 | 8;
+  face: Face;
+  eyes: Eyes;
+  mouth: Mouth;
+  headwear: Headwear;
+  cape: boolean;
+  belly: boolean;
 }
 
 export const DEFAULT_FEATURES: Features = {
-  bodyLength: 1, legLength: 1, neckLength: 1, bulk: 1, snout: 0.35, ears: "none", horns: "none",
-  tail: "none", dorsalFin: false, spikes: false, mane: false, pattern: "plain", legs: 6,
+  bodyLength: 1, legLength: 1, neckLength: 1, bulk: 1, snout: 0.35, ears: "none", horns: "none", tail: "none",
+  dorsalFin: false, spikes: false, mane: false, pattern: "plain", legs: 6, face: "animal", eyes: "normal", mouth: "none",
+  headwear: "none", cape: false, belly: false,
 };
-
 export const featuresOf = (s: UnitSpec): Features => ({ ...DEFAULT_FEATURES, ...s.features });
-export type Attack = "punch" | "kick" | "bite" | "peck" | "charge" | "slash" | "ram";
-export type Weapon = "none" | "sword" | "knife" | "club" | "spear";
+
+// ---- genome: structure, movement, combat ----
+export type Frame = "upright" | "horizontal" | "long" | "round" | "wheeled";
+export type Loco = "walk" | "gallop" | "crawl" | "hop" | "slither" | "roll" | "fly" | "float" | "flop" | "drive";
+export type Foot = "paw" | "hoof" | "claw" | "foot" | "stump";
+export type Hand = "hand" | "claw" | "pincer" | "blade" | "hammer";
+export type WingKind = "none" | "feather" | "bat" | "insect";
+export type TailKind = "none" | "thin" | "thick" | "bushy" | "club" | "stinger" | "fin";
+export type Back = "none" | "spikes" | "plates" | "shell" | "fin" | "hump";
+export type Material = "skin" | "fur" | "feathers" | "scales" | "metal" | "slime" | "stone" | "wood" | "ghost" | "fire" | "ice";
+export type Verb =
+  | "bite" | "peck" | "headbutt" | "gore" | "claw" | "punch" | "slash" | "pinch"
+  | "kick" | "stomp" | "charge" | "slam" | "tail_swipe" | "sting" | "whip";
+export type Ranged = "none" | "spit" | "fire_breath" | "ice_breath" | "shoot" | "throw_rock" | "lightning" | "laser" | "poison_spray" | "web";
+export type DType = "blunt" | "slash" | "pierce" | "fire" | "ice" | "poison" | "electric" | "acid";
+export type Element = "none" | "fire" | "ice" | "poison" | "electric" | "acid";
+export type Special = "regenerate" | "split" | "explode" | "thorns" | "rage";
+
+export interface Genome {
+  frame: Frame;
+  loco: Loco;
+  clumsy: number; // 0 graceful .. 1 flailing
+  legs: number; // 0..12, even
+  legLen: number; // ~0.4..1.6
+  legThick: number; // ~0.6..1.6
+  foot: Foot;
+  arms: number; // 0, 2, 4, 6
+  armLen: number;
+  hand: Hand;
+  heads: number; // 0..5
+  headSize: number; // ~0.6..1.8
+  neckLen: number; // ~0.3..3.2
+  wings: WingKind;
+  wingSize: number;
+  tail: TailKind;
+  tailLen: number; // ~0.4..1.8
+  tentacles: number; // 0..8
+  back: Back;
+  bodyLen: number; // ~0.7..1.6
+  bulk: number; // ~0.7..1.6
+  material: Material;
+  attacks: Verb[]; // 1..2 melee moves
+  ranged: Ranged;
+  element: Element; // extra harm carried by its melee attacks
+  resist: DType[];
+  weak: DType[];
+  specials: Special[];
+}
+
+export const DEFAULT_GENOME: Genome = {
+  frame: "horizontal", loco: "walk", clumsy: 0.3, legs: 4, legLen: 1, legThick: 1, foot: "paw", arms: 0, armLen: 1, hand: "hand",
+  heads: 1, headSize: 1, neckLen: 1, wings: "none", wingSize: 1, tail: "none", tailLen: 1, tentacles: 0, back: "none",
+  bodyLen: 1, bulk: 1, material: "fur", attacks: ["bite"], ranged: "none", element: "none", resist: [], weak: [], specials: [],
+};
 
 export interface UnitSpec {
   label: string;
   count: number;
-  plan: PlanId;
-  size: number; // metres
+  plan: PlanId; // legacy hint for hand-written presets; genome wins when present
+  size: number; // metres: height when upright, length when horizontal or long
   weight: number; // kg
   strength: number;
   toughness: number;
@@ -48,28 +116,39 @@ export interface UnitSpec {
   canFly: boolean;
   colors: { body: string; accent: string };
   features?: Partial<Features>;
-  /** Emoji art rig id (src/art/rigs.json). When set, the body is fitted to the drawing. */
-  art?: string;
-  /** Artist-rigged model id (src/models). Takes priority over art. */
+  genome?: Genome;
+  /** Artist-rigged model id (src/models) used as the body when the thing is an ordinary animal. */
   model?: string;
 }
 
+/** Every unit runs on a genome. Hand-written presets get one derived from their plan. */
+export function genomeOf(s: UnitSpec): Genome {
+  if (s.genome) return s.genome;
+  const F = featuresOf(s);
+  const verb: Record<Attack, Verb> = { punch: "punch", kick: "kick", bite: "bite", peck: "peck", charge: "headbutt", slash: "slash", ram: "charge" };
+  const tail: TailKind = F.tail === "none" ? "none" : F.tail === "long" ? "thin" : F.tail === "short" ? "thin" : "bushy";
+  const base = { ...DEFAULT_GENOME, attacks: [verb[s.attack]], neckLen: F.neckLength, bulk: F.bulk, legLen: F.legLength, bodyLen: F.bodyLength, tail, back: (F.spikes ? "spikes" : F.dorsalFin ? "fin" : "none") as Back };
+  switch (s.plan) {
+    case "biped": return { ...base, frame: "upright", legs: 2, arms: 2, loco: "walk", material: "skin", foot: "foot", neckLen: 1, tail: "none" };
+    case "quadruped": return { ...base, frame: "horizontal", legs: 4, loco: "gallop", material: "fur" };
+    case "bird": return { ...base, frame: "horizontal", legs: 2, loco: s.canFly ? "fly" : "walk", wings: "feather", material: "feathers", foot: "claw", legLen: 1.3, bodyLen: 0.8, attacks: ["peck"] };
+    case "fish": return { ...base, frame: "long", legs: 0, loco: "flop", tail: "fin", material: "scales", attacks: ["bite"], bulk: 1.4 };
+    case "snake": return { ...base, frame: "long", legs: 0, loco: "slither", material: "scales", bulk: 0.8 };
+    case "bug": return { ...base, frame: "horizontal", legs: F.legs, loco: "crawl", material: "scales", foot: "claw" };
+    case "blob": return { ...base, frame: "round", legs: 0, heads: 0, loco: "hop", material: "slime", attacks: ["slam"] };
+    case "wheeled": return { ...base, frame: "wheeled", legs: 0, heads: 0, loco: "drive", material: "metal", attacks: ["charge"] };
+  }
+}
+
 const human = (over: Partial<UnitSpec>): UnitSpec => ({
-  label: "a man",
-  count: 1,
-  plan: "biped",
-  size: 1.78,
-  weight: 78,
-  strength: 1,
-  toughness: 1,
-  speed: 1,
-  bravery: 0.6,
-  attack: "punch",
-  weapon: "none",
-  armor: 0,
-  canFly: false,
-  colors: { body: "#e8b98f", accent: "#3d5a80" },
-  ...over,
+  label: "a man", count: 1, plan: "biped", size: 1.78, weight: 78, strength: 1, toughness: 1, speed: 1, bravery: 0.6,
+  attack: "punch", weapon: "none", armor: 0, canFly: false, colors: { body: "#e8b98f", accent: "#3d5a80" },
+  features: { face: "human", mouth: "smile" }, ...over,
+});
+
+const animal = (label: string, model: string, count: number, size: number, weight: number, over: Partial<UnitSpec> = {}): UnitSpec => ({
+  label, count, plan: "quadruped", model, size, weight, strength: 1.5, toughness: 1.4, speed: 1.3, bravery: 0.9,
+  attack: "bite", weapon: "none", armor: 0.1, canFly: false, colors: { body: "#8d8f96", accent: "#2a2a2e" }, ...over,
 });
 
 export interface Matchup {
@@ -79,13 +158,16 @@ export interface Matchup {
   right: UnitSpec;
 }
 
-// Hand-written specs for the prototype. The AI step will produce exactly this shape.
-const animal = (label: string, model: string, count: number, size: number, weight: number, over: Partial<UnitSpec> = {}): UnitSpec => ({
-  label, count, plan: "quadruped", model, size, weight, strength: 1.5, toughness: 1.4, speed: 1.3, bravery: 0.9,
-  attack: "bite", weapon: "none", armor: 0.1, canFly: false, colors: { body: "#8d8f96", accent: "#2a2a2e" }, ...over,
-});
-
-export const MATCHUPS: Matchup[] = [
+const HAND: Matchup[] = [
+  {
+    id: "gorilla",
+    title: "100 men vs 1 gorilla",
+    left: human({ label: "100 men", count: 100 }),
+    right: human({
+      label: "1 gorilla", size: 1.7, weight: 190, strength: 3, toughness: 3.5, speed: 1.2, bravery: 1, armor: 0.25,
+      colors: { body: "#3b3b3b", accent: "#1f1f1f" }, features: { face: "animal", snout: 0.3, bulk: 1.35, mouth: "fangs", eyes: "angry" },
+    }),
+  },
   {
     id: "wolves",
     title: "a pack of wolves vs 3 big dogs",
@@ -93,126 +175,34 @@ export const MATCHUPS: Matchup[] = [
     right: animal("3 big dogs", "husky", 3, 1.4, 45, { strength: 1.4, bravery: 0.7 }),
   },
   {
-    id: "gorilla",
-    title: "100 men vs 1 gorilla",
-    left: human({ label: "100 men", count: 100 }),
-    right: {
-      label: "1 gorilla",
-      count: 1,
-      plan: "biped",
-      size: 1.7,
-      weight: 190,
-      strength: 3,
-      toughness: 3.5,
-      speed: 1.2,
-      bravery: 1,
-      attack: "punch",
-      weapon: "none",
-      armor: 0.25,
-      canFly: false,
-      colors: { body: "#3b3b3b", accent: "#1f1f1f" },
-    },
-  },
-  {
     id: "geese",
     title: "a swarm of angry geese vs a medieval knight",
     left: {
-      label: "a swarm of angry geese",
-      count: 14,
-      plan: "bird",
-      size: 0.8,
-      weight: 5,
-      strength: 1.6,
-      toughness: 0.8,
-      speed: 1.6,
-      bravery: 1,
-      attack: "peck",
-      weapon: "none",
-      armor: 0,
-      canFly: true,
-      colors: { body: "#f2f2f2", accent: "#f4a300" },
+      label: "a swarm of angry geese", count: 14, plan: "bird", size: 0.8, weight: 5, strength: 1.6, toughness: 0.8, speed: 1.6,
+      bravery: 1, attack: "peck", weapon: "none", armor: 0, canFly: true, colors: { body: "#f2f2f2", accent: "#f4a300" },
+      features: { neckLength: 1.8, mouth: "beak", eyes: "angry" },
     },
     right: human({
-      label: "a medieval knight",
-      weight: 105,
-      strength: 1.4,
-      toughness: 2,
-      speed: 0.8,
-      bravery: 1,
-      attack: "slash",
-      weapon: "sword",
-      armor: 0.6,
-      colors: { body: "#9aa4ad", accent: "#7a1f1f" },
+      label: "a medieval knight", weight: 105, strength: 1.4, toughness: 2, speed: 0.8, bravery: 1, attack: "slash", weapon: "sword",
+      armor: 0.6, colors: { body: "#9aa4ad", accent: "#7a1f1f" }, features: { face: "human", headwear: "helmet", cape: true },
     }),
-  },
-  {
-    id: "roomba",
-    title: "a Roomba with a knife vs 3 house cats",
-    left: {
-      label: "a Roomba with a knife",
-      count: 1,
-      plan: "wheeled",
-      size: 0.35,
-      weight: 4,
-      strength: 1.5,
-      toughness: 1.5,
-      speed: 1.4,
-      bravery: 1,
-      attack: "ram",
-      weapon: "knife",
-      armor: 0.3,
-      canFly: false,
-      colors: { body: "#2b2d42", accent: "#8d99ae" },
-    },
-    right: {
-      label: "3 house cats",
-      count: 3,
-      plan: "quadruped",
-      size: 0.5,
-      weight: 4.5,
-      strength: 1.3,
-      toughness: 0.7,
-      speed: 1.8,
-      bravery: 0.4,
-      attack: "bite",
-      weapon: "none",
-      armor: 0,
-      canFly: false,
-      colors: { body: "#e07a2f", accent: "#fff3e0" },
-      features: { ears: "pointy", tail: "long", pattern: "stripes", snout: 0.25, bulk: 0.85 },
-      art: "cat",
-    },
   },
   {
     id: "toddlers",
     title: "50 toddlers vs a grizzly bear",
     left: human({
-      label: "50 toddlers",
-      count: 50,
-      size: 0.9,
-      weight: 13,
-      strength: 0.7,
-      toughness: 0.6,
-      speed: 0.9,
-      bravery: 0.9,
-      colors: { body: "#f1c7a3", accent: "#e76f51" },
+      label: "50 toddlers", count: 50, size: 0.9, weight: 13, strength: 0.7, toughness: 0.6, speed: 0.9, bravery: 0.9,
+      colors: { body: "#f1c7a3", accent: "#e76f51" }, features: { face: "human", mouth: "smile", eyes: "big" },
     }),
     right: {
-      label: "a grizzly bear",
-      count: 1,
-      plan: "quadruped",
-      size: 2.2,
-      weight: 300,
-      strength: 2.6,
-      toughness: 3.5,
-      speed: 1.1,
-      bravery: 1,
-      attack: "bite",
-      weapon: "none",
-      armor: 0.3,
-      canFly: false,
-      colors: { body: "#6b4226", accent: "#3e2615" },
+      label: "a grizzly bear", count: 1, plan: "quadruped", size: 2.2, weight: 300, strength: 2.6, toughness: 3.5, speed: 1.1,
+      bravery: 1, attack: "bite", weapon: "none", armor: 0.3, canFly: false, colors: { body: "#6b4226", accent: "#3e2615" },
       features: { ears: "round", tail: "short", bulk: 1.3, snout: 0.5, legLength: 0.85 },
     },
   },
 ];
+
+/** Showcase fights whose specs were designed by Jev itself (scripts: npm run bake). */
+const BAKED = baked as unknown as Matchup[];
+
+export const MATCHUPS: Matchup[] = [...HAND, ...BAKED];

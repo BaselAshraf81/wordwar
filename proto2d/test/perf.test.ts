@@ -8,7 +8,7 @@ beforeAll(async () => {
 });
 
 const beast = (art: string, count: number, size: number, weight: number): UnitSpec => ({
-  label: art, count, plan: "quadruped", art, size, weight, strength: 2.5, toughness: 2.5, speed: 1.5, bravery: 1,
+  label: art, count, plan: "quadruped", model: art === "ox" ? "bull" : art, size, weight, strength: 2.5, toughness: 2.5, speed: 1.5, bravery: 1,
   attack: "charge", weapon: "none", armor: 0.3, canFly: false, colors: { body: "#7a4e2d", accent: "#2a2a2e" },
 });
 

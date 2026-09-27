@@ -24,4 +24,4 @@ it.skipIf(!process.env.BALANCE)("balance report", () => {
     }
     console.log(`${m.title}\n${rows.join("\n")}`);
   }
-}, 300_000);
+}, 900_000);
