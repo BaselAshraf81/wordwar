@@ -23,12 +23,48 @@ const FIXED: Partial<Record<Paint, string>> = { metal: "#cfd6dd", bone: "#f1e9d2
 const DCOL: Record<DType, string> = { blunt: "#fff1b8", slash: "#ffffff", pierce: "#ff5a5a", fire: "#ff8a1f", ice: "#9ee7ff", poison: "#8fe35a", electric: "#ffe84a", acid: "#c6f24a" };
 const STATUS_TINT: Partial<Record<Status, [RGB, number]>> = { freeze: [[190, 240, 255], 0.55], poison: [[120, 210, 70], 0.3], burn: [[255, 120, 40], 0.25], corrode: [[190, 230, 70], 0.3], shock: [[255, 240, 120], 0.4] };
 
-type Item = { kind: "col"; d: DrawCollider } | { kind: "deco"; d: DrawDeco };
+/** Soft radial puff, rendered once per kind; breath streams draw it instead of building gradients per particle. */
+const puffs = new Map<string, HTMLCanvasElement>();
+function puff(kind: string): HTMLCanvasElement {
+  let c = puffs.get(kind);
+  if (c) return c;
+  c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const g = c.getContext("2d")!;
+  const cols = kind === "fire_breath" ? ["#fff1a8", "#ff8a1f", "#c53a12"] : kind === "ice_breath" ? ["#ffffff", "#9ee7ff", "#4aa8d8"] : ["#e2ffc4", "#8fe35a", "#3f8f2a"];
+  const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, cols[0]);
+  gr.addColorStop(0.5, cols[1]);
+  gr.addColorStop(1, cols[2] + "00");
+  g.fillStyle = gr;
+  g.fillRect(0, 0, 64, 64);
+  puffs.set(kind, c);
+  return c;
+}
+/** Clockwise arc segment (subpaths all wind the same way so batched overlaps union). */
+function arcPoly(ctx: CanvasPath, x: number, y: number, r: number, a0: number, sweep: number): void {
+  ctx.arc(x, y, r, a0, a0 + sweep);
+}
+/** A closed circle as its own subpath. */
+function circlePoly(ctx: CanvasPath, x: number, y: number, r: number): void {
+  ctx.moveTo(x + r, y);
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.closePath();
+}
+
+/** Armies bigger than this are drawn pass by pass across the whole team instead of unit by unit. */
+const CROWD_BATCH = 12;
+interface SinkEntry {
+  style: string;
+  path: Path2D;
+  stroke: number;
+}
+type Item = ({ kind: "col"; d: DrawCollider } | { kind: "deco"; d: DrawDeco }) & { cache?: Map<unknown, [string, string]> };
 interface UnitDraw {
   u: Unit;
   far: Item[];
   near: Item[];
-  front: DrawDeco[];
+  front: Item[];
 }
 
 export class Renderer {
@@ -42,7 +78,9 @@ export class Renderer {
   view = { x: 0, scale: 40, groundY: 0, w: 1, h: 1 };
 
   constructor(private canvas: HTMLCanvasElement) {
-    this.ctx = canvas.getContext("2d")!;
+    // CPU-backed canvas: thousands of small curved fills rasterise far faster on the CPU than they
+    // tessellate on an integrated GPU (measured: 33 ms -> 16.7 ms frames for 100-unit fights).
+    this.ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: !location.search.includes("gpu") })!;
   }
 
   attach(b: Battle): void {
@@ -50,11 +88,12 @@ export class Renderer {
     this.battle = b;
     this.version = b.version;
     this.colors.clear();
+    this.lines.clear();
     const by = new Map<Unit, UnitDraw>();
     const get = (u: Unit) => by.get(u) ?? (by.set(u, { u, far: [], near: [], front: [] }), by.get(u)!);
     for (const d of b.draw) (d.layer === 0 ? get(d.unit).far : get(d.unit).near).push({ kind: "col", d });
     for (const d of b.decor) {
-      if (d.d.front) get(d.unit).front.push(d);
+      if (d.d.front) get(d.unit).front.push({ kind: "deco", d });
       else (d.layer === 0 ? get(d.unit).far : get(d.unit).near).push({ kind: "deco", d });
     }
     this.groups = [...by.values()];
@@ -68,7 +107,8 @@ export class Renderer {
     const crowd = (this.battle?.specs[u.team].count ?? 1) > 3;
     const tint = (c: string, id: number, amt: number) => {
       if (!crowd) return c;
-      const t = (((id * 2654435761) >>> 0) % 1000) / 1000;
+      // Five shades, not a unique one per body: batched crowds then need only a few fills per colour.
+      const t = ((((id * 2654435761) >>> 0) % 5) + 0.5) / 5;
       return t < 0.5 ? mix(c, BLACK, (0.5 - t) * amt) : mix(c, WHITE, (t - 0.5) * amt);
     };
     let body = tint(u.spec.colors.body, u.id, 0.5);
@@ -87,10 +127,16 @@ export class Renderer {
     return c;
   }
 
+  /** Render-resolution multiplier, lowered by the main loop when frames run long. */
+  quality = 1;
+
   resize(): void {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    // Pixel budget: sharp enough, but a 3x phone screen would triple the fill cost for nothing.
+    const small = Math.min(window.innerWidth, window.innerHeight) < 600 || (navigator.hardwareConcurrency ?? 8) <= 4;
+    const dpr = Math.min(small ? 1.25 : 1.5, window.devicePixelRatio || 1) * this.quality;
     this.canvas.width = Math.round(this.canvas.clientWidth * dpr);
     this.canvas.height = Math.round(this.canvas.clientHeight * dpr);
+    this.cam.ready = false; // same framing at the new pixel size, no zoom drift
   }
 
   private frame(b: Battle): void {
@@ -151,35 +197,39 @@ export class Renderer {
       ctx.fillRect(x0, groundY - s * 6, s * 3, s * 6);
     }
     ctx.fillStyle = "rgba(30,40,20,0.22)";
+    ctx.beginPath();
     for (const u of b.units) {
       const p = u.torso.translation();
       const r = u.spec.size * 0.3 * s * Math.max(0.3, 1 - Math.max(0, p.y - u.bp.standY) / (u.spec.size * 3));
-      ctx.beginPath();
+      ctx.moveTo(X(p.x) + r, groundY + 2);
       ctx.ellipse(X(p.x), groundY + 2, r, r * 0.18, 0, 0, Math.PI * 2);
-      ctx.fill();
     }
+    ctx.fill();
 
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     const outline = Math.max(1.5, s * 0.025);
     const crowdFx = b.units.length < 40;
+    const batched = [0, 1].map((t) => b.specs[t].count > CROWD_BATCH);
     for (const alive of [false, true]) {
+      for (const team of [0, 1] as const) {
+        if (batched[team]) this.crowd(this.groups.filter((gd) => gd.u.team === team && gd.u.alive === alive && !this.hideUnit(gd.u)), alive, X, Y, s, outline);
+      }
       for (const gd of this.groups) {
         const u = gd.u;
-        if (u.alive !== alive || this.hideUnit(u)) continue;
+        if (batched[u.team] || u.alive !== alive || this.hideUnit(u)) continue;
         const m = u.g.material;
         ctx.globalAlpha = m === "ghost" ? 0.55 + 0.1 * Math.sin(b.time * 4 + u.id) : m === "slime" ? 0.85 : 1;
         const tint = this.tintOf(u);
         for (const layer of [gd.far, gd.near]) {
           for (const it of layer) this.item(it, X, Y, s, outline, true, alive, tint);
-          if ((m === "fire" || m === "ice") && crowdFx && alive) {
-            ctx.shadowColor = m === "fire" ? "#ff8a1f" : "#9ee7ff";
-            ctx.shadowBlur = s * 0.35;
-          }
+          this.flush();
+
           for (const it of layer) this.item(it, X, Y, s, outline, false, alive, tint);
-          ctx.shadowBlur = 0;
+          this.flush();
         }
-        for (const d of gd.front) this.item({ kind: "deco", d }, X, Y, s, outline, false, alive, tint);
+        for (const it of gd.front) this.item(it, X, Y, s, outline, false, alive, tint);
+        this.flush();
         ctx.globalAlpha = 1;
         if (alive && crowdFx) this.statusFx(u, X, Y, s, b.time);
       }
@@ -266,66 +316,178 @@ export class Renderer {
           if (!line && shape.kind !== "ball") this.fillShape(shape, x, y, a, s, paint === "glow" ? "#fff4a8" : "#fff", pts);
           return;
         }
+        this.flush();
         this.eye(x, y, shape.r * s, unit.facing, alive, paint === "glow");
         return;
       }
       if (paint === "shine") {
-        if (!line && alive && shape.kind === "ball") {
+        if (!line && alive && shape.kind === "ball" && this.eyeSink) {
+          circlePoly(this.sinkPath(this.eyeSink, "shine", "rgba(255,255,255,0.35)"), x, y, shape.r * s);
+        } else if (!line && alive && shape.kind === "ball") {
+          this.flush();
           ctx.fillStyle = "rgba(255,255,255,0.35)";
           ctx.beginPath();
-          ctx.arc(x, y, shape.r * s, 0, Math.PI * 2);
+          circlePoly(ctx, x, y, shape.r * s);
           ctx.fill();
         }
         return;
       }
     }
-    let c = this.paint(unit, paint, far);
-    if (!alive) c = mix(c, GREY, 0.55);
-    else if (tint) c = mix(c, tint[0], tint[1]);
-    if (line) this.fillShape(shape, x, y, a, s, mix(c, BLACK, 0.6), pts, outline);
-    else this.fillShape(shape, x, y, a, s, c, pts);
+    const state = alive ? (tint ?? "live") : "dead";
+    const cache = (it.cache ??= new Map());
+    let v = cache.get(state);
+    if (!v) cache.set(state, (v = this.variant(unit, paint, far, state)));
+    this.fillShape(shape, x, y, a, s, line ? this.lineOf(unit, state) : v[0], pts, line ? outline : 0);
   }
 
-  /** Fills a shape; with `grow` > 0 it is expanded by that many pixels (the outline pass). */
+  /** One outline colour per creature and state, so the whole silhouette outline is a single fill. */
+  private lines = new Map<Unit, Map<unknown, string>>();
+  private lineOf(u: Unit, state: "live" | "dead" | [RGB, number]): string {
+    let m = this.lines.get(u);
+    if (!m) this.lines.set(u, (m = new Map()));
+    let c = m.get(state);
+    if (!c) m.set(state, (c = mix(this.variant(u, "body", false, state)[0], BLACK, 0.62)));
+    return c;
+  }
+
+  /** [fill, outline] for a paint in a state, cached: no colour maths or string building per frame. */
+  private variant(u: Unit, p: Paint, far: boolean, state: "live" | "dead" | [RGB, number]): [string, string] {
+    let c = this.paint(u, p, far);
+    if (state === "dead") c = mix(c, GREY, 0.55);
+    else if (state !== "live") c = mix(c, state[0], state[1]);
+    return [c, mix(c, BLACK, 0.6)];
+  }
+
+  // ---- batched fills: consecutive shapes of one colour become one path, one fill call ----
+  private bColor = "";
+  private bOpen = false;
+  private begin(color: string): void {
+    if (color === this.bColor && this.bOpen) return;
+    this.flush();
+    this.ctx.beginPath();
+    this.bColor = color;
+    this.bOpen = true;
+  }
+  flush(): void {
+    if (!this.bOpen) return;
+    this.ctx.fillStyle = this.bColor;
+    this.ctx.fill();
+    this.bOpen = false;
+  }
+
+  /** Appends a shape (grown by `grow` px for the outline pass) to the current batch. All subpaths wind clockwise so overlaps union. */
   private fillShape(sh: DecoShape, x: number, y: number, a: number, s: number, color: string, pts: [number, number][] | null, grow = 0): void {
-    const ctx = this.ctx;
+    let ctx: CanvasPath;
+    if (this.sink) ctx = this.sinkPath(this.sink, color, color);
+    else {
+      this.begin(color);
+      ctx = this.ctx;
+    }
     if (sh.kind === "capsule") {
       const dx = -Math.sin(a) * sh.hh * s, dy = -Math.cos(a) * sh.hh * s;
-      ctx.strokeStyle = color;
-      ctx.lineWidth = sh.r * 2 * s + grow * 2;
-      ctx.beginPath();
-      ctx.moveTo(x - dx, y - dy);
-      ctx.lineTo(x + dx, y + dy);
-      ctx.stroke();
-    } else if (sh.kind === "ball") {
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(x, y, sh.r * s + grow, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (sh.kind === "box") {
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(-a);
-      ctx.fillStyle = color;
-      ctx.fillRect(-sh.hx * s - grow, -sh.hy * s - grow, sh.hx * 2 * s + grow * 2, sh.hy * 2 * s + grow * 2);
-      ctx.restore();
-    } else if (pts) {
-      ctx.beginPath();
-      pts.forEach(([px, py], i) => (i ? ctx.lineTo(px, py) : ctx.moveTo(px, py)));
+      const R = sh.r * s + grow;
+      const th = Math.atan2(2 * dy, 2 * dx);
+      const x1 = x - dx, y1 = y - dy, x2 = x + dx, y2 = y + dy;
+      ctx.moveTo(x2 + Math.cos(th - Math.PI / 2) * R, y2 + Math.sin(th - Math.PI / 2) * R);
+      arcPoly(ctx, x2, y2, R, th - Math.PI / 2, Math.PI);
+      arcPoly(ctx, x1, y1, R, th + Math.PI / 2, Math.PI);
       ctx.closePath();
+    } else if (sh.kind === "ball") {
+      circlePoly(ctx, x, y, sh.r * s + grow);
+    } else if (sh.kind === "box") {
+      const hx = sh.hx * s + grow, hy = sh.hy * s + grow;
+      const c = Math.cos(-a), sn = Math.sin(-a);
+      const P = (u: number, v: number) => [x + u * c - v * sn, y + u * sn + v * c] as const;
+      const q = [P(-hx, -hy), P(hx, -hy), P(hx, hy), P(-hx, hy)];
+      ctx.moveTo(q[0][0], q[0][1]);
+      for (let i = 1; i < 4; i++) ctx.lineTo(q[i][0], q[i][1]);
+      ctx.closePath();
+    } else if (pts) {
+      let p = pts;
+      const area = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (p[1][1] - p[0][1]);
+      if (area < 0) p = [p[0], p[2], p[1]];
       if (grow) {
-        ctx.lineWidth = grow * 2;
-        ctx.strokeStyle = color;
-        ctx.stroke();
+        const cx = (p[0][0] + p[1][0] + p[2][0]) / 3, cy = (p[0][1] + p[1][1] + p[2][1]) / 3;
+        p = p.map(([px, py]) => {
+          const d = Math.hypot(px - cx, py - cy) || 1;
+          return [px + ((px - cx) / d) * grow * 1.6, py + ((py - cy) / d) * grow * 1.6] as [number, number];
+        });
       }
-      ctx.fillStyle = color;
-      ctx.fill();
+      ctx.moveTo(p[0][0], p[0][1]);
+      ctx.lineTo(p[1][0], p[1][1]);
+      ctx.lineTo(p[2][0], p[2][1]);
+      ctx.closePath();
     }
+  }
+  // ---- crowd batching: a whole army's shapes of one colour go into one Path2D and one fill ----
+  // Hundreds of small fills per frame cost far more to rasterise than a few large ones.
+  private sink: Map<string, SinkEntry> | null = null;
+  private eyeSink: Map<string, SinkEntry> | null = null;
+  private sinkPath(m: Map<string, SinkEntry>, key: string, style: string, stroke = 0): Path2D {
+    let e = m.get(key);
+    if (!e) m.set(key, (e = { style, path: new Path2D(), stroke }));
+    return e.path;
+  }
+  private drain(m: Map<string, SinkEntry>): void {
+    const ctx = this.ctx;
+    for (const e of m.values()) {
+      if (e.stroke) {
+        ctx.strokeStyle = e.style;
+        ctx.lineWidth = e.stroke;
+        ctx.stroke(e.path);
+      } else {
+        ctx.fillStyle = e.style;
+        ctx.fill(e.path);
+      }
+    }
+    m.clear();
+  }
+
+  /** Every unit of one crowd team and one state, drawn pass by pass across the whole army. */
+  private crowd(units: UnitDraw[], alive: boolean, X: (x: number) => number, Y: (y: number) => number, s: number, outline: number): void {
+    if (!units.length) return;
+    const ctx = this.ctx;
+    const m = units[0].u.g.material;
+    ctx.globalAlpha = m === "ghost" ? 0.6 : m === "slime" ? 0.85 : 1;
+    const sink = new Map<string, SinkEntry>();
+    this.eyeSink = new Map();
+    for (const layer of ["far", "near", "front"] as const) {
+      for (const line of layer === "front" ? [false] : [true, false]) {
+        this.sink = sink;
+        for (const gd of units) {
+          const tint = this.tintOf(gd.u);
+          for (const it of gd[layer]) this.item(it, X, Y, s, outline, line, alive, tint);
+        }
+        this.sink = null;
+        this.drain(sink);
+      }
+    }
+    this.drain(this.eyeSink);
+    this.eyeSink = null;
+    ctx.globalAlpha = 1;
   }
 
   private eye(ex: number, ey: number, er: number, facing: number, alive: boolean, glow: boolean): void {
     const ctx = this.ctx;
     er = Math.max(1.5, er);
+    const es = this.eyeSink;
+    if (es) {
+      if (!alive) {
+        const p = this.sinkPath(es, "x", "#141018", Math.max(1, er * 0.45));
+        p.moveTo(ex - er, ey - er);
+        p.lineTo(ex + er, ey + er);
+        p.moveTo(ex + er, ey - er);
+        p.lineTo(ex - er, ey + er);
+      } else if (glow) {
+        circlePoly(this.sinkPath(es, "halo", "rgba(255,240,120,0.35)"), ex, ey, er * 2.2);
+        circlePoly(this.sinkPath(es, "core", "#fff6b0"), ex, ey, er);
+      } else {
+        circlePoly(this.sinkPath(es, "ring", "#141018"), ex, ey, er * 1.2);
+        circlePoly(this.sinkPath(es, "white", "#fff"), ex, ey, er);
+        circlePoly(this.sinkPath(es, "pupil", "#141018"), ex + facing * er * 0.35, ey, er * 0.55);
+      }
+      return;
+    }
     if (!alive) {
       ctx.strokeStyle = "#141018";
       ctx.lineWidth = Math.max(1, er * 0.45);
@@ -338,26 +500,27 @@ export class Renderer {
       return;
     }
     if (glow) {
-      ctx.shadowColor = "#fff27a";
-      ctx.shadowBlur = er * 3;
+      ctx.fillStyle = "rgba(255,240,120,0.35)";
+      ctx.beginPath();
+      circlePoly(ctx, ex, ey, er * 2.2);
+      ctx.fill();
       ctx.fillStyle = "#fff6b0";
       ctx.beginPath();
-      ctx.arc(ex, ey, er, 0, Math.PI * 2);
+      circlePoly(ctx, ex, ey, er);
       ctx.fill();
-      ctx.shadowBlur = 0;
       return;
     }
     ctx.fillStyle = "#141018";
     ctx.beginPath();
-    ctx.arc(ex, ey, er * 1.2, 0, Math.PI * 2);
+    circlePoly(ctx, ex, ey, er * 1.2);
     ctx.fill();
     ctx.fillStyle = "#fff";
     ctx.beginPath();
-    ctx.arc(ex, ey, er, 0, Math.PI * 2);
+    circlePoly(ctx, ex, ey, er);
     ctx.fill();
     ctx.fillStyle = "#141018";
     ctx.beginPath();
-    ctx.arc(ex + facing * er * 0.35, ey, er * 0.55, 0, Math.PI * 2);
+    circlePoly(ctx, ex + facing * er * 0.35, ey, er * 0.55);
     ctx.fill();
   }
 
@@ -420,31 +583,21 @@ export class Renderer {
       case "fire_breath":
       case "ice_breath":
       case "poison_spray": {
-        const c = sh.kind === "fire_breath" ? ["#fff1a8", "#ff8a1f", "#c53a12"] : sh.kind === "ice_breath" ? ["#ffffff", "#9ee7ff", "#4aa8d8"] : ["#e2ffc4", "#8fe35a", "#3f8f2a"];
-        const g = ctx.createRadialGradient(x, y, 0, x, y, r * (1 + age * 1.8));
-        g.addColorStop(0, c[0]);
-        g.addColorStop(0.5, c[1]);
-        g.addColorStop(1, c[2] + "00");
-        ctx.fillStyle = g;
+        const R = r * (1 + age * 1.8);
         ctx.globalAlpha = Math.max(0, 1 - age * 0.8);
-        ctx.beginPath();
-        ctx.arc(x, y, r * (1 + age * 1.8), 0, Math.PI * 2);
-        ctx.fill();
+        ctx.drawImage(puff(sh.kind), x - R, y - R, R * 2, R * 2);
         ctx.globalAlpha = 1;
         return;
       }
       case "laser":
       case "lightning": {
         ctx.strokeStyle = sh.kind === "laser" ? "#ff4d4d" : "#fff27a";
-        ctx.shadowColor = ctx.strokeStyle;
-        ctx.shadowBlur = r * 3;
         ctx.lineWidth = r * 1.6;
         ctx.beginPath();
         ctx.moveTo(X(sh.x - sh.vx * 0.05), Y(sh.y - sh.vy * 0.05));
         if (sh.kind === "lightning") ctx.lineTo(X(sh.x - sh.vx * 0.025) + r * 2, Y(sh.y - sh.vy * 0.025) - r * 2);
         ctx.lineTo(x, y);
         ctx.stroke();
-        ctx.shadowBlur = 0;
         return;
       }
       case "shoot":

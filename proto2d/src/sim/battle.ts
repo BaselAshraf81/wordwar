@@ -22,8 +22,11 @@ export function initPhysics(): Promise<void> {
 
 // Collision groups: bit0 ground, bit1 team 0, bit2 team 1. Allies pass through each other.
 const groups = (membership: number, filter: number) => (membership << 16) | filter;
-const GROUND = groups(0b001, 0b110);
-const TEAM = [groups(0b010, 0b101), groups(0b100, 0b011)];
+const GROUND = groups(0b0001, 0b1110);
+const TEAM = [groups(0b0010, 0b0101), groups(0b0100, 0b0011)];
+// bit3: settled corpses. They lie on the ground and nothing else touches them.
+const CORPSE = groups(0b1000, 0b0001);
+const SETTLE_AFTER = 3;
 
 const STIFF: Record<JointRole, number> = { hip: 140, knee: 140, shoulder: 90, elbow: 90, neck: 110, tail: 25, wing: 80, wheel: 0, spine: 70, tentacle: 30 };
 const TORQUE: Record<JointRole, number> = { hip: 0.7, knee: 0.55, shoulder: 0.3, elbow: 0.22, neck: 0.18, tail: 0.06, wing: 0.08, wheel: 0, spine: 0.3, tentacle: 0.04 };
@@ -96,6 +99,8 @@ export interface Unit {
   bravery: number;
   kills: number;
   diedAt: number;
+  /** Corpse put to sleep: touches only the ground and costs the solver nothing. */
+  settled: boolean;
   strikes: number;
   hits: number;
   dealt: number;
@@ -168,6 +173,8 @@ export class Battle {
     const ground = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
     this.world.createCollider(RAPIER.ColliderDesc.cuboid(this.arenaHalf + 20, 1).setTranslation(0, -1).setFriction(1).setCollisionGroups(GROUND), ground);
     for (const s of [-1, 1]) this.world.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 30).setTranslation(s * (this.arenaHalf + 0.5), 30).setCollisionGroups(GROUND), ground);
+    // Big battles: fewer solver passes. Wobblier joints, which suits the genre, at half the cost.
+    if (specs[0].count + specs[1].count > 40) this.world.numSolverIterations = 2;
     const gap = 3 + biggest * 1.5;
     specs.forEach((spec, team) => {
       const side = team === 0 ? -1 : 1;
@@ -203,7 +210,7 @@ export class Battle {
       torso: null as unknown as RigidBody, feet: [], mass: spec.weight, health: spec.toughness, maxHealth: spec.toughness,
       alive: true, facing, phase: r.next(), target: null, retargetIn: 0, cooldown: Math.floor(r.range(10, 50)),
       rangedCd: Math.floor(r.range(20, 90)), strikeT: 0, move: null, firing: 0, struck: new Set(), stunUntil: 0, fleeing: false,
-      bravery: base.bravery >= 1 ? 1 : r.jitter(base.bravery, 0.35), kills: 0, diedAt: -1, strikes: 0, hits: 0, dealt: 0,
+      bravery: base.bravery >= 1 ? 1 : r.jitter(base.bravery, 0.35), kills: 0, diedAt: -1, settled: false, strikes: 0, hits: 0, dealt: 0,
       nextHop: r.range(0, 0.6), leanTarget: 0, hover: { x: r.range(0.2, 1.6), y: r.range(-0.3, 1.4) }, status: {}, generation, slow: 1, streamHitAt: -1,
     };
     const ghost = unit.g.material === "ghost";
@@ -225,7 +232,7 @@ export class Battle {
       unit.bodies.set(seg.id, body);
     }
     unit.torso = unit.bodies.get(bp.torso)!;
-    unit.torso.setAdditionalSolverIterations(2);
+    if (crowd <= CHEAP_ABOVE) unit.torso.setAdditionalSolverIterations(2);
     const posOf = (id: string) => bp.segments.find((s) => s.id === id)!.pos;
     // Mass each joint has to move: its child segment and everything hanging off it.
     const kids = new Map<string, string[]>();
@@ -266,7 +273,37 @@ export class Battle {
     this.stepShots();
     for (let i = this.fx.length - 1; i >= 0; i--) if ((this.fx[i].t += DT) > 0.6) this.fx.splice(i, 1);
     this.checkMorale();
+    this.settleCorpses();
     this.checkEnd();
+  }
+
+  /**
+   * Big battles leave piles of ragdolls that the solver keeps working on. A few seconds after death,
+   * once a body has come to rest, it stops touching fighters and goes to sleep. Deterministic: it
+   * depends only on simulation state, so replays still match on every device.
+   */
+  private settleCorpses(): void {
+    if (this.steps % 20 !== 0) return;
+    for (const u of this.units) {
+      if (u.alive || u.settled || this.time - u.diedAt < SETTLE_AFTER) continue;
+      let still = true;
+      for (const b of u.bodies.values()) {
+        const v = b.linvel();
+        if (v.x * v.x + v.y * v.y > 0.5 || Math.abs(b.angvel()) > 1.5) {
+          still = false;
+          break;
+        }
+      }
+      if (!still && this.time - u.diedAt < SETTLE_AFTER * 3) continue;
+      u.settled = true;
+      for (const { j } of u.joints.values()) j.setMotorMaxForce(0);
+      for (const b of u.bodies.values()) {
+        for (let i = 0; i < b.numColliders(); i++) b.collider(i).setCollisionGroups(CORPSE);
+        b.setLinvel({ x: 0, y: Math.min(0, b.linvel().y) }, false);
+        b.setAngvel(0, false);
+        b.sleep();
+      }
+    }
   }
 
   // ------------------------------------------------------------ status, specials
@@ -279,7 +316,8 @@ export class Battle {
         continue;
       }
       const dot = STATUS_DOT[k];
-      if (dot) this.harm(u, dot[0] * DT, dot[1], null);
+      // Big things burn and rot slower: less surface for their bulk.
+      if (dot) this.harm(u, (dot[0] * DT) / Math.pow(Math.max(1, u.mass / 75), 0.3), dot[1], null);
       if (k === "freeze") slow *= 0.3;
       if (k === "web") slow *= 0.25;
       if (k === "shock") u.stunUntil = Math.max(u.stunUntil, this.time + DT * 2);
@@ -592,7 +630,8 @@ export class Battle {
     const rage = has(attacker.g, "rage") ? 1 + (1 - Math.max(0, attacker.health / attacker.maxHealth)) * 0.9 : 1;
     let base = DAMAGE * sharp * eff * (1 - Math.min(0.8, armor) * 0.5) * Math.sqrt(attacker.spec.strength) * rage;
     // Only something far bigger kills in one blow; between rough equals a fight takes several hits.
-    if (attacker.mass < 8 * victim.mass) base = Math.min(base, 0.45 * victim.maxHealth);
+    // The cap grows with the mass ratio: a gorilla can drop a man with one good swing, a man can't.
+    if (attacker.mass < 8 * victim.mass) base = Math.min(base, 0.45 * Math.max(1, attacker.mass / victim.mass) * victim.maxHealth);
     attacker.hits++;
     this.fx.push({ kind: "hit", x: at.x, y: at.y, t: 0, r: Math.min(1.2, 0.15 + dv * 0.1), color: dtype });
     this.harm(victim, base, dtype, attacker);

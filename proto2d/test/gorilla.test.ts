@@ -28,7 +28,7 @@ it.skipIf(!process.env.GORILLA)("gorilla time budget", () => {
     }
     const pct = (n: number) => `${Math.round((100 * n) / c.steps)}%`;
     console.log(
-      `seed ${seed}: lived ${(c.steps / 60).toFixed(1)}s kills=${g.kills} strikes=${g.strikes} | stunned ${pct(c.stunned)} knocked-down ${pct(c.down)} ` +
+      `seed ${seed}: lived ${(c.steps / 60).toFixed(1)}s kills=${g.kills} strikes=${g.strikes} hits=${g.hits} dealt=${g.dealt.toFixed(1)} manHP=${b.units[0].maxHealth.toFixed(2)} | stunned ${pct(c.stunned)} knocked-down ${pct(c.down)} ` +
         `striking ${pct(c.striking)} cooldown ${pct(c.cooldown)} | avg men within 1.2m ${(c.attackersNear / c.steps).toFixed(1)}`,
     );
     b.dispose();

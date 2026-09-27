@@ -90,13 +90,15 @@ export interface Blueprint {
 }
 
 /** Large crowds get cheaper bodies. A performance decision, never an AI one. */
-export const CHEAP_ABOVE = 30;
+export const CHEAP_ABOVE = 24;
+export const HUGE_ABOVE = 60;
 
 export function buildBlueprint(s: UnitSpec, facing: 1 | -1, crowd: number): Blueprint {
   const g = genomeOf(s);
   const model = s.model ? MODEL_BY_ID.get(s.model) : undefined;
-  if (model) return modelBody(s, facing, model, g);
-  return genomeBody(s, g, facing, crowd > CHEAP_ABOVE);
+  // Rigged models are expensive (many segments plus a skinned mesh each): crowds use the cheap genome body.
+  if (model && crowd <= CHEAP_ABOVE) return modelBody(s, facing, model, g);
+  return genomeBody(s, g, facing, crowd > CHEAP_ABOVE, crowd > HUGE_ABOVE);
 }
 
 export function shapeArea(sh: Shape): number {

@@ -37,14 +37,15 @@ export function locoOf(g: Genome, legs: number): Loco {
 
 const even = (n: number, max: number) => clamp(Math.round(n / 2) * 2, 0, max);
 
-export function genomeBody(s: UnitSpec, g: Genome, f: 1 | -1, cheap: boolean): Blueprint {
+export function genomeBody(s: UnitSpec, g: Genome, f: 1 | -1, cheap: boolean, huge = false): Blueprint {
   const F = featuresOf(s);
   const S = s.size;
   const b = new Builder(f);
-  const nLegs = g.frame === "wheeled" ? 0 : even(g.legs, 12);
-  const nArms = even(g.arms, 6);
+  // Crowds get cheaper bodies (fewer, single-segment limbs). A performance decision, never an AI one.
+  const nLegs = g.frame === "wheeled" || (cheap && g.loco === "fly" && g.wings !== "none") ? 0 : Math.min(cheap ? 4 : 12, even(g.legs, 12));
+  const nArms = cheap ? Math.min(1, g.arms) : even(g.arms, 6);
   const nHeads = clamp(Math.round(g.heads), 0, 5);
-  const nTent = clamp(Math.round(g.tentacles), 0, 8);
+  const nTent = clamp(Math.round(g.tentacles), 0, cheap ? 2 : 8);
   const loco = locoOf(g, nLegs);
   const oneSegLegs = cheap || nLegs > 6;
   const side = g.frame !== "upright";
@@ -94,7 +95,7 @@ export function genomeBody(s: UnitSpec, g: Genome, f: 1 | -1, cheap: boolean): B
       makeHead(id, at(base, ang, rh * 0.85), parent, base);
       return;
     }
-    const n = clamp(Math.round(len / (0.12 * S)), 1, 4);
+    const n = cheap ? 1 : clamp(Math.round(len / (0.12 * S)), 1, 4);
     const r = Math.max(0.018 * S, rh * 0.45);
     const c = b.chain(`n${i}_`, parent, base, ang, len, n, r, r * 0.8, 1, "neck", [-0.6, 0.6]);
     necks.push(c.ids);
@@ -150,6 +151,13 @@ export function genomeBody(s: UnitSpec, g: Genome, f: 1 | -1, cheap: boolean): B
     const ang = safeAngle(shoulder, fwd(f, -Math.PI / 2 + 0.05), armLen, r * 2);
     const elbow = at(shoulder, ang, armLen / 2);
     const hand = at(shoulder, ang, armLen);
+    if (cheap) {
+      b.limb(`fa${k}`, shoulder, hand, r, layer);
+      b.joint(`sh${k}`, parent, `fa${k}`, shoulder, lim(f, -1.2, 3.0), "shoulder");
+      arms.push({ shoulder: `sh${k}` });
+      addHand(`fa${k}`, hand, r, weapon);
+      return;
+    }
     b.limb(`ua${k}`, shoulder, elbow, r, layer);
     b.limb(`fa${k}`, elbow, hand, r * 0.9, layer);
     b.joint(`sh${k}`, parent, `ua${k}`, shoulder, lim(f, -1.2, 3.0), "shoulder");
@@ -184,7 +192,7 @@ export function genomeBody(s: UnitSpec, g: Genome, f: 1 | -1, cheap: boolean): B
     if (g.tail === "none") return;
     const L = 0.35 * S * g.tailLen;
     const r = { thin: 0.02, thick: 0.05, bushy: 0.065, club: 0.035, stinger: 0.03, fin: 0.035, none: 0 }[g.tail] * S;
-    const c = b.chain("tl", parent, base, safeAngle(base, ang, L, r * 2 + 0.07 * S), L, g.tailLen > 1.2 ? 3 : 2, r, g.tail === "bushy" ? r * 1.1 : r * 0.6, 1, "tail", [-1.1, 1.1], 0, { densityMul: 0.5 });
+    const c = b.chain("tl", parent, base, safeAngle(base, ang, L, r * 2 + 0.07 * S), L, cheap ? 1 : g.tailLen > 1.2 ? 3 : 2, r, g.tail === "bushy" ? r * 1.1 : r * 0.6, 1, "tail", [-1.1, 1.1], 0, { densityMul: 0.5 });
     tails.push(...c.ids);
     const tip = b.get(c.ids[c.ids.length - 1]);
     const off: [number, number] = [c.tip[0] - tip.pos[0], c.tip[1] - tip.pos[1]];
@@ -201,7 +209,7 @@ export function genomeBody(s: UnitSpec, g: Genome, f: 1 | -1, cheap: boolean): B
   const addWings = (base: [number, number]) => {
     if (g.wings === "none") return;
     const W = 0.45 * S * g.wingSize;
-    for (const [k, layer] of [[0, 0], [1, 2]] as const) {
+    for (const [k, layer] of (cheap ? [[1, 2]] : [[0, 0], [1, 2]]) as [number, 0 | 2][]) {
       const ang = bwd(f, 0.9 + k * 0.15);
       const tip = at(base, ang, W);
       const id = `wg${k}`;
@@ -219,7 +227,7 @@ export function genomeBody(s: UnitSpec, g: Genome, f: 1 | -1, cheap: boolean): B
     for (let i = 0; i < nTent; i++) {
       const base = from(i);
       const ang = safeAngle(base, down ? -Math.PI / 2 + (i - (nTent - 1) / 2) * 0.18 : fwd(f, -0.4 - i * 0.15), 0.4 * S, 0.05 * S);
-      const c = b.chain(`tn${i}_`, parent, base, ang, 0.4 * S, cheap ? 2 : 3, 0.03 * S, 0.012 * S, i % 2 ? 2 : 0, "tentacle", [-1.2, 1.2], 0, { densityMul: 0.4, paint: "accent" });
+      const c = b.chain(`tn${i}_`, parent, base, ang, 0.4 * S, cheap ? 1 : 3, 0.03 * S, 0.012 * S, i % 2 ? 2 : 0, "tentacle", [-1.2, 1.2], 0, { densityMul: 0.4, paint: "accent" });
       tentacles.push(c.ids);
       parts.tentacle.push(c.ids[c.ids.length - 1]);
       extra[c.ids[c.ids.length - 1]] = 0.3 * S;
@@ -303,7 +311,8 @@ export function genomeBody(s: UnitSpec, g: Genome, f: 1 | -1, cheap: boolean): B
     for (let p = 0; p < pairs; p++) {
       const x = f * (pairs === 1 ? 0 : bh * 0.85 - (bh * 1.7 * p) / (pairs - 1));
       const front = pairs === 1 ? 1 : p < pairs / 2 ? 1 : -1;
-      for (const sd of [0, 1]) {
+      // Huge crowds: near-side legs only (front + back still read as four-legged from the side).
+      for (const sd of huge && pairs === 2 ? [1] : [0, 1]) {
         const phase = pairs <= 2 ? ((p + sd) % 2) * 0.5 : (p / pairs + sd * 0.5) % 1;
         const low = addLeg(p * 2 + sd, [x + f * sd * rl * 0.4, torsoY], sd ? 2 : 0, phase, splay * front, rl);
         if (p === 0 && sd === 1) parts.leg.push(low);
@@ -320,7 +329,7 @@ export function genomeBody(s: UnitSpec, g: Genome, f: 1 | -1, cheap: boolean): B
     addWings([f * bh * 0.1, torsoY + rt * 0.8]);
     addTentacles((i) => [f * (bh * 0.6 - i * 0.05 * S), torsoY - rt * 0.8], "torso", true);
   } else if (g.frame === "long") {
-    const n = cheap ? 5 : clamp(Math.round(4 + g.bodyLen * 3), 5, 9);
+    const n = cheap ? 4 : clamp(Math.round(4 + g.bodyLen * 3), 5, 9);
     const seg = S / n;
     const r = 0.065 * S * g.bulk;
     const legH = nLegs ? 0.13 * S * g.legLen : 0;

@@ -112,7 +112,16 @@ export class ModelView {
     }
   }
 
+  private cleared = false;
+
   render(camX: number, scale: number, groundY: number, w: number, h: number): void {
+    if (!this.items.length) {
+      // Nothing 3D in this fight: clear once, then leave the GPU alone.
+      if (!this.cleared) this.renderer.clear();
+      this.cleared = true;
+      return;
+    }
+    this.cleared = false;
     const cam = this.camera;
     cam.left = camX - w / 2 / scale;
     cam.right = camX + w / 2 / scale;

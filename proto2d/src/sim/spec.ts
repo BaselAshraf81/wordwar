@@ -174,32 +174,6 @@ const HAND: Matchup[] = [
     left: animal("a pack of wolves", "wolf", 8, 1.5, 40),
     right: animal("3 big dogs", "husky", 3, 1.4, 45, { strength: 1.4, bravery: 0.7 }),
   },
-  {
-    id: "geese",
-    title: "a swarm of angry geese vs a medieval knight",
-    left: {
-      label: "a swarm of angry geese", count: 14, plan: "bird", size: 0.8, weight: 5, strength: 1.6, toughness: 0.8, speed: 1.6,
-      bravery: 1, attack: "peck", weapon: "none", armor: 0, canFly: true, colors: { body: "#f2f2f2", accent: "#f4a300" },
-      features: { neckLength: 1.8, mouth: "beak", eyes: "angry" },
-    },
-    right: human({
-      label: "a medieval knight", weight: 105, strength: 1.4, toughness: 2, speed: 0.8, bravery: 1, attack: "slash", weapon: "sword",
-      armor: 0.6, colors: { body: "#9aa4ad", accent: "#7a1f1f" }, features: { face: "human", headwear: "helmet", cape: true },
-    }),
-  },
-  {
-    id: "toddlers",
-    title: "50 toddlers vs a grizzly bear",
-    left: human({
-      label: "50 toddlers", count: 50, size: 0.9, weight: 13, strength: 0.7, toughness: 0.6, speed: 0.9, bravery: 0.9,
-      colors: { body: "#f1c7a3", accent: "#e76f51" }, features: { face: "human", mouth: "smile", eyes: "big" },
-    }),
-    right: {
-      label: "a grizzly bear", count: 1, plan: "quadruped", size: 2.2, weight: 300, strength: 2.6, toughness: 3.5, speed: 1.1,
-      bravery: 1, attack: "bite", weapon: "none", armor: 0.3, canFly: false, colors: { body: "#6b4226", accent: "#3e2615" },
-      features: { ears: "round", tail: "short", bulk: 1.3, snout: 0.5, legLength: 0.85 },
-    },
-  },
 ];
 
 /** Showcase fights whose specs were designed by Jev itself (scripts: npm run bake). */

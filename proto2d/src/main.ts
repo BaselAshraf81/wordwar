@@ -156,25 +156,80 @@ function hud(b: Battle): void {
   }
 }
 
+let stepMs = 2;
+let drawMs = 3;
+const prof = { sim: 0, draw: 0, frames: 0 };
+if (import.meta.env.DEV) Object.assign(window, { __prof: prof, __r: renderer });
+
+function resize(): void {
+  renderer.resize();
+  models.resize(canvas.width, canvas.height);
+}
+
+// Adaptive resolution. Filling hundreds of ragdoll shapes is pixel-bound, and much of it happens
+// after our JS returns (rasterisation), so we watch the real frame interval: long frames lower the
+// render resolution a notch, a run of fast ones raises it back.
+// `best` is the fastest window seen: the display's own refresh interval (60, 120, or a 30 Hz
+// battery-saver cap), so "slow" always means slower than this screen can go.
+const adapt = { sum: 0, js: 0, n: 0, good: 0, need: 4, best: Infinity };
+function adaptQuality(frameMs: number, jsMs: number): void {
+  if (frameMs > 100) return; // tab was hidden or stalled: not a rendering signal
+  adapt.sum += frameMs;
+  adapt.js += jsMs;
+  if (++adapt.n < 45) return;
+  const avg = adapt.sum / adapt.n, js = adapt.js / adapt.n;
+  adapt.sum = adapt.js = adapt.n = 0;
+  adapt.best = Math.max(6, Math.min(adapt.best, avg));
+  const q = renderer.quality;
+  // Only when the time goes outside our JS (rasterising): fewer pixels don't make physics faster.
+  if (avg > adapt.best * 1.3 && js > 4 && avg - js > adapt.best * 0.9 && q > 0.55) {
+    renderer.quality = Math.max(0.55, q - 0.15);
+    adapt.good = 0;
+    adapt.need = 8; // after a drop, prove it for longer before trying sharper again
+    resize();
+  } else if (avg < adapt.best * 1.1 && q < 1 && ++adapt.good >= adapt.need) {
+    renderer.quality = Math.min(1, q + 0.15);
+    adapt.good = 0;
+    resize();
+  }
+}
+
 function loop(now: number): void {
-  const dt = Math.min(0.1, (now - last) / 1000);
+  const raw = now - last;
+  const dt = Math.min(0.1, raw / 1000);
   last = now;
+  const t0 = performance.now();
   if (battle && !paused) {
     acc += dt * (slow ? 0.3 : 1);
+    // Adaptive budget: never spend more than ~10 ms a frame on physics. A slow device gets a
+    // slightly slower-motion fight instead of a frozen screen.
+    // Steps that fit next to the drawing in ~12 ms. One step per frame is real time at 60 Hz, so
+    // this only slows the fight when the machine can't keep up; without it a missed frame queues
+    // two steps, which makes the next frame miss too.
+    const cap = Math.max(1, Math.min(4, Math.floor((12 - drawMs) / Math.max(0.5, stepMs))));
     let n = 0;
-    while (acc >= DT && n < 4) {
+    while (acc >= DT && n < cap) {
+      const s0 = performance.now();
       battle.step();
+      stepMs = stepMs * 0.9 + (performance.now() - s0) * 0.1;
       acc -= DT;
       n++;
     }
-    if (n === 4) acc = 0; // fall behind gracefully rather than spiral
+    if (n === cap) acc = Math.min(acc, DT);
   }
+  const t1 = performance.now();
   if (battle) {
     renderer.render(battle);
     const v = renderer.view;
     models.render(v.x, v.scale, v.groundY, v.w, v.h);
     hud(battle);
   }
+  const t2 = performance.now();
+  drawMs = drawMs * 0.9 + (t2 - t1) * 0.1;
+  prof.sim += t1 - t0;
+  prof.draw += t2 - t1;
+  prof.frames++;
+  if (battle && !paused) adaptQuality(raw, t2 - t0);
   requestAnimationFrame(loop);
 }
 
@@ -218,10 +273,6 @@ async function main(): Promise<void> {
       e.preventDefault();
     }
   });
-  const resize = () => {
-    renderer.resize();
-    models.resize(canvas.width, canvas.height);
-  };
   addEventListener("resize", resize);
   addEventListener("hashchange", () => {
     readHash();
