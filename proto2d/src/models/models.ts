@@ -2,6 +2,9 @@
 // simulation and tests can use it. Side view: x forward (the model faces +x), y up, ground y = 0.
 import facts from "./facts.json";
 
+// Vite's base path (e.g. /wordwar/) in the browser; "/" when bundled for the server.
+const BASE: string = (import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/";
+
 export type GroupRole = "torso" | "neck" | "head" | "leg" | "tail" | "limb";
 
 export interface Group {
@@ -59,7 +62,7 @@ function build(f: Fact): Model {
   }
   const attacks = (["attack", "headbutt", "kick", "punch", "slash"] as ClipName[]).filter((c) => f.clips[c]);
   return {
-    id: f.id, url: `/models/${f.id}.glb`, length: f.xmax - f.xmin, height: f.height, groundY: f.ground,
+    id: f.id, url: `${BASE}models/${f.id}.glb`, length: f.xmax - f.xmin, height: f.height, groundY: f.ground,
     groups: f.groups, boneGroup: f.bones, clips: f.clips, limits, attacks,
   };
 }

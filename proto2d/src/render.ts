@@ -140,21 +140,58 @@ export class Renderer {
   }
 
   private frame(b: Battle): void {
+    // Frame the action, not the stragglers: in a crowd, the outer 10% on each side (fleeing,
+    // flung or flying units) may leave the shot, which keeps narrow phone screens zoomed in.
     let lo = Infinity, hi = -Infinity, top = 2;
-    for (const u of b.units) {
-      if (!u.alive && b.time - u.diedAt > 1.5) continue;
-      const p = u.torso.translation();
-      lo = Math.min(lo, p.x - u.spec.size);
-      hi = Math.max(hi, p.x + u.spec.size);
-      top = Math.max(top, p.y + u.spec.size);
+    for (const team of [0, 1]) {
+      const xs: [number, number][] = [];
+      for (const u of b.units) {
+        if (u.team !== team || (!u.alive && b.time - u.diedAt > 1.5)) continue;
+        const p = u.torso.translation();
+        xs.push([p.x - u.spec.size, p.x + u.spec.size]);
+        top = Math.max(top, Math.min(p.y, u.bp.standY * 3 + u.spec.size) + u.spec.size);
+      }
+      if (!xs.length) continue;
+      const trim = xs.length > 10 ? Math.floor(xs.length * 0.1) : 0;
+      const l = xs.map((v) => v[0]).sort((a, c) => a - c), r = xs.map((v) => v[1]).sort((a, c) => a - c);
+      lo = Math.min(lo, l[trim]);
+      hi = Math.max(hi, r[r.length - 1 - trim]);
     }
     if (!isFinite(lo)) [lo, hi] = [-8, 8];
     const w = this.canvas.width, h = this.canvas.height;
     const span = Math.max(7, hi - lo + 3);
-    const scale = Math.min(w / span, (h * 0.62) / Math.max(3, top + 1));
+    const fitAll = w / span;
+    const fitTall = (h * 0.62) / Math.max(3, top + 1);
+    // Readability floor: the biggest creature should stay a decent fraction of the stage height.
+    // Wide screens rarely hit it; on a phone, fitting a 100-man army edge to edge makes everyone
+    // specks, so there we zoom in on the front line, where the two armies actually meet.
+    let biggest = 0.5, f0 = -Infinity, f1 = Infinity;
+    for (const u of b.units) {
+      if (!u.alive) continue;
+      biggest = Math.max(biggest, u.spec.size);
+      const x = u.torso.translation().x;
+      if (u.team === 0) f0 = Math.max(f0, x);
+      else f1 = Math.min(f1, x);
+    }
+    const narrow = this.canvas.clientWidth < 700;
+    const floor = (h * (narrow ? 0.3 : 0.12)) / biggest;
+    // Never zoom past the point where both front lines are in view (before contact that is the
+    // whole gap between the armies, so the zoom tightens as they close in).
+    const fronts = isFinite(f0) && isFinite(f1) ? w / (Math.abs(f1 - f0) + biggest * 1.8 + 1.5) : Infinity;
+    const scale = Math.min(fitTall, Math.max(fitAll, Math.min(floor, fronts)));
+    let cx = (lo + hi) / 2;
+    if (scale > fitAll * 1.02) {
+      const front = isFinite(f0) && isFinite(f1) ? (f0 + f1) / 2 : cx;
+      const half = w / scale / 2 - 1;
+      cx = half * 2 < hi - lo ? Math.min(hi - half, Math.max(lo + half, front)) : cx;
+    }
     const k = this.cam.ready ? 0.06 : 1;
-    this.cam.x += ((lo + hi) / 2 - this.cam.x) * k;
+    this.cam.x += (cx - this.cam.x) * k;
     this.cam.scale += (scale - this.cam.scale) * k;
+    // Height of the action (tallest living fighter's torso plus a bit), for vertical centring.
+    let act = 1;
+    for (const u of b.units) if (u.alive) act = Math.max(act, Math.min(u.torso.translation().y, u.bp.standY * 2.5) + u.spec.size * 0.35);
+    this.cam.y += (act - this.cam.y) * k;
     this.cam.ready = true;
   }
 
@@ -164,7 +201,9 @@ export class Renderer {
     const { ctx, canvas } = this;
     const w = canvas.width, h = canvas.height;
     const s = this.cam.scale;
-    const groundY = h * 0.84;
+    // Tall (portrait) stages: centre the action vertically instead of leaving a sky of empty space.
+    // The scoreboard covers the top ~20%, so "centre" is the middle of what's left.
+    const groundY = h > w * 1.1 ? Math.min(h * 0.82, Math.max(h * 0.6, h * 0.64 + (this.cam.y * s) / 2)) : h * 0.84;
     const X = (x: number) => w / 2 + (x - this.cam.x) * s;
     const Y = (y: number) => groundY - y * s;
     this.view = { x: this.cam.x, scale: s, groundY, w, h };
@@ -461,8 +500,9 @@ export class Renderer {
         this.sink = null;
         this.drain(sink);
       }
+      // Eyes with their own depth layer: far-side eyes must not show through near-side bodies.
+      this.drain(this.eyeSink);
     }
-    this.drain(this.eyeSink);
     this.eyeSink = null;
     ctx.globalAlpha = 1;
   }

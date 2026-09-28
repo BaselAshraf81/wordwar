@@ -1,4 +1,5 @@
-import { ModelView } from "./model-view";
+import "./style.css";
+import type { ModelView } from "./model-view";
 import { Renderer } from "./render";
 import { Battle, DT, initPhysics } from "./sim/battle";
 import { genomeOf, MATCHUPS, type UnitSpec } from "./sim/spec";
@@ -6,8 +7,19 @@ import { genomeOf, MATCHUPS, type UnitSpec } from "./sim/spec";
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>("stage");
 const renderer = new Renderer(canvas);
-const models = new ModelView($<HTMLCanvasElement>("models"));
-renderer.hideUnit = (u) => models.shows(u);
+// three.js (the rigged-model overlay) loads only once a fight actually has a rigged animal in it.
+let models: ModelView | null = null;
+let modelsLoading: Promise<void> | null = null;
+function needModels(b: Battle): void {
+  if (models) return void models.attach(b);
+  if (!b.units.some((u) => u.bp.model)) return;
+  modelsLoading ??= import("./model-view").then(({ ModelView }) => {
+    models = new ModelView($<HTMLCanvasElement>("models"));
+    models.resize(canvas.width, canvas.height);
+    if (battle) models.attach(battle);
+  });
+}
+renderer.hideUnit = (u) => models?.shows(u) ?? false;
 
 let battle: Battle | null = null;
 let specs: [UnitSpec, UnitSpec] = [MATCHUPS[0].left, MATCHUPS[0].right];
@@ -74,7 +86,7 @@ function start(): void {
   battle?.dispose();
   battle = new Battle(specs, seed);
   renderer.attach(battle);
-  models.attach(battle);
+  needModels(battle);
   acc = 0;
   writeHash();
   $("lname").textContent = specs[0].label;
@@ -87,7 +99,21 @@ function start(): void {
   banner.classList.remove("refused");
   $<HTMLInputElement>("left").value = specs[0].label;
   $<HTMLInputElement>("right").value = specs[1].label;
-  $<HTMLSelectElement>("matchups").value = presetId ?? "";
+  for (const b of document.querySelectorAll<HTMLButtonElement>("#matchups button")) {
+    const on = b.dataset.id === presetId;
+    b.setAttribute("aria-current", String(on));
+  }
+  document.title = `${specs[0].label} vs ${specs[1].label} | wordwar`;
+  hudText.clear();
+}
+
+function loadPreset(id: string): void {
+  const m = MATCHUPS.find((x) => x.id === id);
+  if (!m) return;
+  specs = [m.left, m.right];
+  presetId = m.id;
+  seed = newSeed();
+  start();
 }
 
 function say(title: string, detail: string, refused = false): void {
@@ -102,9 +128,14 @@ function say(title: string, detail: string, refused = false): void {
 
 type ApiResult = { ok: true; spec: UnitSpec; ms: number; tokens: number } | { ok: false; reason: string } | { error: string };
 
+// GET so identical phrases are served from the edge cache: each thing is designed once, for everyone.
 async function askJev(phrase: string): Promise<ApiResult> {
-  const r = await fetch("/api/unit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phrase }) });
-  return (await r.json()) as ApiResult;
+  const r = await fetch(`/api/wordwar?phrase=${encodeURIComponent(phrase.replace(/\s+/g, " "))}`);
+  try {
+    return (await r.json()) as ApiResult;
+  } catch {
+    return { error: r.status === 429 ? "Too many armies at once. Try again in a minute." : "Jev did not answer. Try again." };
+  }
 }
 
 async function fight(e: Event): Promise<void> {
@@ -117,7 +148,11 @@ async function fight(e: Event): Promise<void> {
   }
   const btn = $<HTMLButtonElement>("fight");
   btn.disabled = true;
-  btn.textContent = "Jev is deciding…";
+  btn.textContent = "Designing…";
+  $("banner").hidden = true;
+  $("designing-text").textContent = `Jev is designing ${phrases[0]} and ${phrases[1]}…`;
+  $("designing").hidden = false;
+  (document.activeElement as HTMLElement | null)?.blur(); // close the phone keyboard so the fight is visible
   paused = true;
   try {
     const results = await Promise.all(phrases.map(askJev));
@@ -136,18 +171,27 @@ async function fight(e: Event): Promise<void> {
     seed = newSeed();
     start();
   } catch {
-    say("Couldn't reach Jev", "Is the dev server running with TYPESAFE_API_KEY set?", true);
+    say("Couldn't reach Jev", "Check your connection and try again.", true);
   } finally {
     paused = false;
     btn.disabled = false;
     btn.textContent = "Fight";
+    $("designing").hidden = true;
   }
 }
 
+// Only touch the DOM when the text changes: no style/layout work on frames where nothing moved.
+const hudText = new Map<string, string>();
+function setText(id: string, text: string): void {
+  if (hudText.get(id) === text) return;
+  hudText.set(id, text);
+  $(id).textContent = text;
+}
+
 function hud(b: Battle): void {
-  $("lcount").textContent = `${b.aliveCount(0)} / ${b.specs[0].count} standing`;
-  $("rcount").textContent = `${b.aliveCount(1)} / ${b.specs[1].count} standing`;
-  $("clock").textContent = `${b.time.toFixed(1)}s`;
+  setText("lcount", `${b.aliveCount(0)} / ${b.specs[0].count} standing`);
+  setText("rcount", `${b.aliveCount(1)} / ${b.specs[1].count} standing`);
+  setText("clock", `${b.time.toFixed(1)}s`);
   if (b.result && $("banner").hidden) {
     const w = b.result.winner;
     if (w === null) return say("Nobody wins", `Draw after ${b.result.time.toFixed(1)}s`);
@@ -163,7 +207,7 @@ if (import.meta.env.DEV) Object.assign(window, { __prof: prof, __r: renderer });
 
 function resize(): void {
   renderer.resize();
-  models.resize(canvas.width, canvas.height);
+  models?.resize(canvas.width, canvas.height);
 }
 
 // Adaptive resolution. Filling hundreds of ragdoll shapes is pixel-bound, and much of it happens
@@ -221,7 +265,7 @@ function loop(now: number): void {
   if (battle) {
     renderer.render(battle);
     const v = renderer.view;
-    models.render(v.x, v.scale, v.groundY, v.w, v.h);
+    models?.render(v.x, v.scale, v.groundY, v.w, v.h);
     hud(battle);
   }
   const t2 = performance.now();
@@ -234,16 +278,21 @@ function loop(now: number): void {
 }
 
 async function main(): Promise<void> {
-  const pick = $<HTMLSelectElement>("matchups");
-  for (const m of MATCHUPS) pick.add(new Option(m.title, m.id));
-  pick.onchange = () => {
-    const m = MATCHUPS.find((x) => x.id === pick.value);
-    if (!m) return;
-    specs = [m.left, m.right];
-    presetId = m.id;
-    seed = newSeed();
-    start();
-    pick.blur();
+  const list = $("matchups");
+  for (const m of MATCHUPS) {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.id = m.id;
+    b.textContent = m.title;
+    b.onclick = () => loadPreset(m.id);
+    li.append(b);
+    list.append(li);
+  }
+  $("surprise").onclick = () => {
+    const others = MATCHUPS.filter((m) => m.id !== presetId);
+    loadPreset(others[Math.floor(Math.random() * others.length)].id);
+    list.querySelector<HTMLElement>('[aria-current="true"]')?.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
   };
   $("armies").addEventListener("submit", fight);
   $("restart").onclick = start;
@@ -257,9 +306,24 @@ async function main(): Promise<void> {
     slowBtn.setAttribute("aria-pressed", String(slow));
   };
   $("share").onclick = async () => {
-    await navigator.clipboard?.writeText(location.href);
-    $("share").textContent = "Copied";
-    setTimeout(() => ($("share").textContent = "Copy link"), 1200);
+    const url = location.href;
+    const title = `${specs[0].label} vs ${specs[1].label}`;
+    // Phones get the share sheet; desktops get the link on the clipboard.
+    if (navigator.share && matchMedia("(pointer: coarse)").matches) {
+      try {
+        await navigator.share({ title: `${title} | wordwar`, text: `Who wins: ${title}?`, url });
+        return;
+      } catch {
+        /* cancelled: fall through to copying */
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      $("share").textContent = "Link copied";
+    } catch {
+      prompt("Copy this link", url);
+    }
+    setTimeout(() => ($("share").textContent = "Share"), 1400);
   };
   addEventListener("keydown", (e) => {
     const t = e.target;
@@ -273,7 +337,8 @@ async function main(): Promise<void> {
       e.preventDefault();
     }
   });
-  addEventListener("resize", resize);
+  // The stage is whatever the header leaves; it changes when the header wraps, not just on window resize.
+  new ResizeObserver(resize).observe($("stagebox"));
   addEventListener("hashchange", () => {
     readHash();
     start();
@@ -283,6 +348,13 @@ async function main(): Promise<void> {
   await initPhysics();
   readHash();
   start();
+  $("designing").hidden = true;
+  // Dev only: ?t=9 fast-forwards to 9 s and pauses (for share-image captures).
+  const ff = Number(new URLSearchParams(location.search).get("t"));
+  if (import.meta.env.DEV && ff > 0 && battle) {
+    while (battle.time < ff && !battle.result) battle.step();
+    paused = true;
+  }
   requestAnimationFrame(loop);
 }
 

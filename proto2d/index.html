@@ -2,40 +2,99 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='7' fill='%23b5433a'/></svg>" />
-    <title>wordwar: type any army, watch it fight</title>
-    <link rel="stylesheet" href="/src/style.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>wordwar: type any two armies, watch physics decide</title>
+    <meta name="description" content="Type anything, like 50 geese with knives or a haunted vending machine. An AI designs each creature's body, attacks and weaknesses, then a physics simulation decides who wins. Free, in your browser." />
+    <link rel="canonical" href="https://baselashraf.com/wordwar/" />
+    <meta name="theme-color" content="#9ad0ec" />
+    <meta name="color-scheme" content="light" />
+    <link rel="icon" href="%BASE_URL%favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="%BASE_URL%apple-touch-icon.png" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="wordwar" />
+    <meta property="og:title" content="wordwar: type any two armies, watch physics decide" />
+    <meta property="og:description" content="100 men vs 1 gorilla? 50 geese with knives vs a knight? Type anything. Jev designs it, physics decides." />
+    <meta property="og:url" content="https://baselashraf.com/wordwar/" />
+    <meta property="og:image" content="https://baselashraf.com/wordwar/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="A crowd of ragdoll men piling onto a gorilla in wordwar" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="wordwar: type any two armies, watch physics decide" />
+    <meta name="twitter:description" content="Type anything. Jev designs it, physics decides." />
+    <meta name="twitter:image" content="https://baselashraf.com/wordwar/og.png" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "VideoGame",
+        "name": "wordwar",
+        "url": "https://baselashraf.com/wordwar/",
+        "description": "A browser battle simulator: type any two armies, an AI designs each creature from closed lists, and a deterministic physics simulation decides who wins.",
+        "genre": ["Simulation", "Sandbox"],
+        "gamePlatform": "Web browser",
+        "applicationCategory": "Game",
+        "operatingSystem": "Any",
+        "isAccessibleForFree": true,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "author": { "@type": "Person", "name": "Basel Ashraf", "url": "https://baselashraf.com/" }
+      }
+    </script>
   </head>
   <body>
-    <canvas id="stage" aria-label="Battle view"></canvas>
-    <canvas id="models" aria-hidden="true"></canvas>
-    <header class="bar">
-      <h1>word<span>war</span></h1>
-      <form id="armies" class="armies" autocomplete="off">
-        <label><span class="sr">Left army</span><input id="left" maxlength="80" placeholder="100 men" required /></label>
-        <span class="vs">vs</span>
-        <label><span class="sr">Right army</span><input id="right" maxlength="80" placeholder="1 gorilla" required /></label>
-        <button id="fight" type="submit">Fight</button>
-      </form>
-      <label class="pick">
-        <span class="sr">Example matchups</span>
-        <select id="matchups"><option value="">Examples…</option></select>
-      </label>
-    </header>
-    <section class="score" aria-live="polite">
-      <div class="side left"><b id="lname"></b><span id="lcount"></span><i id="lspec"></i></div>
-      <div class="clock" id="clock">0.0s</div>
-      <div class="side right"><b id="rname"></b><span id="rcount"></span><i id="rspec"></i></div>
-    </section>
-    <div class="banner" id="banner" hidden></div>
-    <footer class="controls">
-      <button id="restart" title="Replay this exact fight (R)">Replay</button>
-      <button id="reseed" title="Same armies, new fight (N)">Rematch</button>
-      <button id="slow" aria-pressed="false" title="Slow motion (S)">Slow-mo</button>
-      <button id="share" title="Copy a link to this exact fight">Copy link</button>
-      <span class="seed" id="seed"></span>
-    </footer>
+    <div class="app">
+      <header class="top">
+        <div class="brand">
+          <h1>word<span>war</span></h1>
+          <p class="tag">Type anything. Jev designs it. Physics decides.</p>
+        </div>
+        <form id="armies" class="armies" autocomplete="off">
+          <label class="army">
+            <span class="sr">Left army</span>
+            <input id="left" maxlength="80" placeholder="100 men" required enterkeyhint="go" spellcheck="false" />
+          </label>
+          <span class="vs" aria-hidden="true">vs</span>
+          <label class="army">
+            <span class="sr">Right army</span>
+            <input id="right" maxlength="80" placeholder="1 gorilla" required enterkeyhint="go" spellcheck="false" />
+          </label>
+          <div class="go">
+            <button id="fight" type="submit" class="primary">Fight</button>
+            <button id="surprise" type="button" title="Load a random example">Surprise me</button>
+          </div>
+        </form>
+        <nav class="examples" aria-label="Example fights">
+          <ul id="matchups"></ul>
+        </nav>
+      </header>
+
+      <main class="stage" id="stagebox">
+        <canvas id="stage" role="img" aria-label="Battle view"></canvas>
+        <canvas id="models" aria-hidden="true"></canvas>
+        <section class="score" aria-label="Scoreboard">
+          <div class="side left"><b id="lname"></b><span id="lcount" aria-live="off"></span><i id="lspec"></i></div>
+          <div class="clock" id="clock" aria-hidden="true">0.0s</div>
+          <div class="side right"><b id="rname"></b><span id="rcount" aria-live="off"></span><i id="rspec"></i></div>
+        </section>
+        <div class="banner" id="banner" role="status" aria-live="polite" hidden></div>
+        <div class="designing" id="designing"><span class="dot" aria-hidden="true"></span><span id="designing-text">Loading the arena…</span></div>
+      </main>
+
+      <footer class="controls">
+        <div class="buttons">
+          <button id="restart" title="Replay this exact fight (R)">Replay</button>
+          <button id="reseed" title="Same armies, new fight (N)">Rematch</button>
+          <button id="slow" aria-pressed="false" title="Slow motion (S)">Slow-mo</button>
+          <button id="share" title="Copy a link to this exact fight">Share</button>
+        </div>
+        <p class="about">
+          <span id="seed"></span>
+          Creatures designed by <a href="https://typesafe.ai" target="_blank" rel="noopener">Jev</a>, fights decided by <a href="https://rapier.rs" target="_blank" rel="noopener">Rapier</a> physics.
+          <a href="https://github.com/BaselAshraf81/wordwar" target="_blank" rel="noopener">Source</a>
+        </p>
+      </footer>
+    </div>
+    <noscript><p class="noscript">wordwar needs JavaScript to run the battle simulation.</p></noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:api": "vite build --ssr src/server/api.ts --outDir dist-api --emptyOutDir",
     "typecheck": "tsc --noEmit",
     "test": "vitest --run --exclude test/perf.test.ts && vitest --run test/perf.test.ts"
   },

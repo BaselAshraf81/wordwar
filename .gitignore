@@ -29,3 +29,4 @@ Thumbs.db
 
 # Downloaded third-party source packs
 assets-src/
+dist-api/

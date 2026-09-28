@@ -1,5 +1,7 @@
 // The battle: specs in, physics out. The winner is whoever is still standing.
-import RAPIER, { type Collider, type RevoluteImpulseJoint, type RigidBody, type World } from "@dimforge/rapier2d-deterministic-compat";
+import type { Collider, RevoluteImpulseJoint, RigidBody, World } from "@dimforge/rapier2d-deterministic-compat";
+// Loaded on demand (its own ~3 MB chunk with the embedded wasm), so the page paints first.
+let RAPIER: typeof import("@dimforge/rapier2d-deterministic-compat").default;
 import { ELEMENT_STATUS, has, RANGED, STATUS_DOT, STATUS_DTYPE, STATUS_DUR, typeMult, VERBS, type RangedRule, type Status } from "./combat";
 import { buildBlueprint, CHEAP_ABOVE, shapeArea, type Blueprint, type ColliderBP, type DecoBP, type JointRole, type MoveBP } from "./plans";
 import { Rng } from "./rng";
@@ -17,7 +19,10 @@ function push(u: { bodies: Map<string, RigidBody> }, dvx: number, dvy: number): 
 
 let ready: Promise<void> | null = null;
 export function initPhysics(): Promise<void> {
-  return (ready ??= RAPIER.init());
+  return (ready ??= import("@dimforge/rapier2d-deterministic-compat").then(async (m) => {
+    RAPIER = m.default;
+    await RAPIER.init();
+  }));
 }
 
 // Collision groups: bit0 ground, bit1 team 0, bit2 team 1. Allies pass through each other.
