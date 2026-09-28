@@ -129,6 +129,8 @@ export class Renderer {
 
   /** Render-resolution multiplier, lowered by the main loop when frames run long. */
   quality = 1;
+  /** Force phone-style framing on or off (the clip recorder draws to a detached canvas). */
+  narrow: boolean | null = null;
 
   resize(): void {
     // Pixel budget: sharp enough, but a 3x phone screen would triple the fill cost for nothing.
@@ -173,7 +175,7 @@ export class Renderer {
       if (u.team === 0) f0 = Math.max(f0, x);
       else f1 = Math.min(f1, x);
     }
-    const narrow = this.canvas.clientWidth < 700;
+    const narrow = this.narrow ?? this.canvas.clientWidth < 700;
     const floor = (h * (narrow ? 0.3 : 0.12)) / biggest;
     // Never zoom past the point where both front lines are in view (before contact that is the
     // whole gap between the armies, so the zoom tightens as they close in).

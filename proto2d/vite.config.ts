@@ -1,3 +1,4 @@
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import handler from "./src/server/api";
 
@@ -7,6 +8,20 @@ function jevApi(): Plugin {
   return {
     name: "jev-api",
     configureServer(server) {
+      // Dev-only sink for the clip recorder: POST /__rec?i=N (JPEG body) -> rec/frame_0000N.jpg.
+      server.middlewares.use("/__rec", async (req, res) => {
+        const q = new URL(req.url ?? "", "http://x").searchParams;
+        const dir = new URL("./rec/", import.meta.url);
+        const i = q.get("i");
+        if (i === "0") rmSync(dir, { recursive: true, force: true });
+        mkdirSync(dir, { recursive: true });
+        if (i !== null) {
+          const chunks: Buffer[] = [];
+          for await (const c of req) chunks.push(c as Buffer);
+          writeFileSync(new URL(`frame_${i.padStart(5, "0")}.jpg`, dir), Buffer.concat(chunks));
+        } else server.config.logger.info(`recorder: done, ${q.get("done")} frames`);
+        res.end("ok");
+      });
       server.middlewares.use("/api/wordwar", (req, res) => {
         // connect strips the mount path; restore it so the handler sees the query string.
         req.url = "/api/wordwar" + (req.url ?? "");
